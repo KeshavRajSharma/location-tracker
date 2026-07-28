@@ -1,0 +1,40 @@
+# =====================
+# Python virtual environment
+# =====================
+venv/
+.venv/
+
+# =====================
+# Python cache
+# =====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# =====================
+# SQLite database
+# =====================
+*.db
+*.sqlite
+*.sqlite3
+
+# =====================
+# Environment / secrets
+# =====================
+.env
+.env.*
+.env*.local
+
+# =====================
+# macOS
+# =====================
+.DS_Store
+
+# =====================
+# IDE / Editor
+# =====================
+.vscode/
+.idea/
+*.swp
+*.swo

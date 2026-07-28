@@ -1,0 +1,91 @@
+# =====================
+# Dependencies
+# =====================
+node_modules/
+
+# Python virtual environment
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# =====================
+# Expo
+# =====================
+.expo/
+.expo-shared/
+dist/
+web-build/
+expo-env.d.ts
+
+# =====================
+# Native build files
+# =====================
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Generated native folders
+/ios
+/android
+
+# =====================
+# Metro bundler
+# =====================
+.metro-health-check*
+
+# =====================
+# Debug logs
+# =====================
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.log
+
+# =====================
+# macOS
+# =====================
+.DS_Store
+
+# =====================
+# Certificates / secrets
+# =====================
+*.pem
+
+# =====================
+# Environment files
+# =====================
+.env
+.env.*
+.env*.local
+
+# =====================
+# TypeScript
+# =====================
+*.tsbuildinfo
+
+# =====================
+# SQLite database
+# =====================
+*.db
+*.sqlite
+*.sqlite3
+
+# =====================
+# App generated files
+# =====================
+app-example/
+
+# =====================
+# IDE / Editor
+# =====================
+.vscode/
+.idea/
+*.swp
+*.swo
