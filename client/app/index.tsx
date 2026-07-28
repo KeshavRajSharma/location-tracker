@@ -1,11 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  Alert,
-  Pressable,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
+import { Alert, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import InfoCard from "../components/InfoCard";
@@ -51,7 +45,7 @@ export default function HomeScreen() {
           hour: "2-digit",
           minute: "2-digit",
           second: "2-digit",
-        })
+        }),
       );
     }, 2000);
 
@@ -62,7 +56,7 @@ export default function HomeScreen() {
     if (currentPointIndex >= mockRoute.length) {
       Alert.alert(
         "Route completed",
-        "Clear or refresh the route before starting again."
+        "Clear or refresh the route before starting again.",
       );
       return;
     }
@@ -80,17 +74,14 @@ export default function HomeScreen() {
     setCurrentPointIndex(0);
     setLastUpdated("Not started");
 
-    Alert.alert(
-      "Route reset",
-      "The mock route is ready to track again."
-    );
+    Alert.alert("Route reset", "The mock route is ready to track again.");
   };
 
   const handleClearPath = () => {
     if (isTracking) {
       Alert.alert(
         "Stop tracking first",
-        "Please stop tracking before clearing the path."
+        "Please stop tracking before clearing the path.",
       );
       return;
     }
@@ -117,7 +108,7 @@ export default function HomeScreen() {
             setLastUpdated("Not started");
           },
         },
-      ]
+      ],
     );
   };
 
@@ -151,10 +142,7 @@ export default function HomeScreen() {
             active={isTracking}
           />
 
-          <StatusBadge
-            label="GPS Fixed"
-            active={mockLocation.gpsFixed}
-          />
+          <StatusBadge label="GPS Fixed" active={mockLocation.gpsFixed} />
         </View>
 
         <View className="mt-6">
@@ -169,34 +157,25 @@ export default function HomeScreen() {
           <InfoCard
             label="Latitude"
             value={
-              latestCoordinate
-                ? latestCoordinate.latitude.toFixed(6)
-                : "--"
+              latestCoordinate ? latestCoordinate.latitude.toFixed(6) : "--"
             }
           />
 
           <InfoCard
             label="Longitude"
             value={
-              latestCoordinate
-                ? latestCoordinate.longitude.toFixed(6)
-                : "--"
+              latestCoordinate ? latestCoordinate.longitude.toFixed(6) : "--"
             }
           />
 
           <InfoCard
             label="Speed"
             value={
-              isTracking
-                ? `${mockLocation.speed.toFixed(1)} km/h`
-                : "0.0 km/h"
+              isTracking ? `${mockLocation.speed.toFixed(1)} km/h` : "0.0 km/h"
             }
           />
 
-          <InfoCard
-            label="Last Updated"
-            value={lastUpdated}
-          />
+          <InfoCard label="Last Updated" value={lastUpdated} />
         </View>
 
         <View className="mt-7">
@@ -205,18 +184,14 @@ export default function HomeScreen() {
               onPress={handleStartTracking}
               className="items-center justify-center rounded-2xl bg-emerald-600 px-4 py-4 active:bg-emerald-700"
             >
-              <Text className="font-bold text-white">
-                Start Tracking
-              </Text>
+              <Text className="font-bold text-white">Start Tracking</Text>
             </Pressable>
           ) : (
             <Pressable
               onPress={handleStopTracking}
               className="items-center justify-center rounded-2xl bg-orange-500 px-4 py-4 active:bg-orange-600"
             >
-              <Text className="font-bold text-white">
-                Stop Tracking
-              </Text>
+              <Text className="font-bold text-white">Stop Tracking</Text>
             </Pressable>
           )}
         </View>
@@ -226,9 +201,7 @@ export default function HomeScreen() {
             onPress={handleRefresh}
             className="flex-1 items-center justify-center rounded-2xl bg-blue-600 px-4 py-4 active:bg-blue-700"
           >
-            <Text className="font-bold text-white">
-              Reset Route
-            </Text>
+            <Text className="font-bold text-white">Reset Route</Text>
           </Pressable>
 
           <Pressable

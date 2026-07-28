@@ -10,6 +10,7 @@ venv/
 # Python cache
 __pycache__/
 *.py[cod]
+*.pyc
 
 # =====================
 # Expo
@@ -89,3 +90,5 @@ app-example/
 .idea/
 *.swp
 *.swo
+
+tracker.db
