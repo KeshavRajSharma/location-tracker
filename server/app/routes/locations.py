@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.database import get_db
+from app.websocket_manager import manager
 
 router = APIRouter(
     prefix="/locations",
@@ -15,7 +16,7 @@ router = APIRouter(
     response_model=schemas.LocationResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def create_location(
+async def create_location(
     location: schemas.LocationCreate,
     db: Session = Depends(get_db),
 ):
@@ -29,6 +30,17 @@ def create_location(
     db.add(new_location)
     db.commit()
     db.refresh(new_location)
+
+    await manager.broadcast_json(
+        {
+            "id": new_location.id,
+            "device_id": new_location.device_id,
+            "latitude": new_location.latitude,
+            "longitude": new_location.longitude,
+            "speed": new_location.speed,
+            "recorded_at": new_location.recorded_at.isoformat(),
+        }
+    )
 
     return new_location
 

@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
 from app.routes.locations import router as locations_router
+from app.websocket_manager import manager
 
 Base.metadata.create_all(bind=engine)
 
@@ -20,6 +21,18 @@ app.add_middleware(
 )
 
 app.include_router(locations_router)
+
+
+@app.websocket("/ws/locations")
+async def locations_websocket(websocket: WebSocket):
+    await manager.connect(websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 
 @app.get("/")

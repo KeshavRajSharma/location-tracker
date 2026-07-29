@@ -1,66 +1,125 @@
-import { useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Alert,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import InfoCard from "../components/InfoCard";
 import StatusBadge from "../components/StatusBadge";
 import TrackerMap from "../components/TrackerMap";
-import { mockLocation } from "../data/mockLocation";
-import { mockRoute } from "../data/mockRoute";
-import type { Coordinate } from "../types/location";
+import {
+  checkBackendHealth,
+  clearLocations,
+  getLocations,
+} from "../services/api";
+import { connectLocationSocket } from "../services/socket";
+import type { ApiLocation, Coordinate } from "../types/location";
 
 export default function HomeScreen() {
-  const [routeCoordinates, setRouteCoordinates] = useState<Coordinate[]>([]);
-  const [currentPointIndex, setCurrentPointIndex] = useState(0);
+  const [locations, setLocations] = useState<ApiLocation[]>([]);
   const [isTracking, setIsTracking] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState("Not started");
+  const [isBackendOnline, setIsBackendOnline] = useState(false);
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const latestCoordinate =
-    routeCoordinates.length > 0
-      ? routeCoordinates[routeCoordinates.length - 1]
-      : null;
+  const socketRef = useRef<WebSocket | null>(null);
+
+  const latestLocation =
+    locations.length > 0 ? locations[locations.length - 1] : null;
+
+  const routeCoordinates: Coordinate[] = locations.map(
+    ({ latitude, longitude }) => ({
+      latitude,
+      longitude,
+    }),
+  );
+
+  const loadLocations = useCallback(async () => {
+    try {
+      const backendOnline = await checkBackendHealth();
+      setIsBackendOnline(backendOnline);
+
+      if (!backendOnline) {
+        setErrorMessage("Backend is currently unreachable.");
+        return;
+      }
+
+      const locationHistory = await getLocations();
+
+      setLocations(locationHistory);
+      setErrorMessage(null);
+    } catch (error) {
+      setIsBackendOnline(false);
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to load location data.",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLocations();
+  }, [loadLocations]);
 
   useEffect(() => {
     if (!isTracking) {
+      socketRef.current?.close();
+      socketRef.current = null;
+      setIsSocketConnected(false);
       return;
     }
 
-    if (currentPointIndex >= mockRoute.length) {
-      setIsTracking(false);
-      return;
-    }
+    socketRef.current = connectLocationSocket({
+      onLocation: (newLocation) => {
+        setLocations((previousLocations) => {
+          const alreadyExists = previousLocations.some(
+            (location) => location.id === newLocation.id,
+          );
 
-    const timer = setTimeout(() => {
-      const nextCoordinate = mockRoute[currentPointIndex];
+          if (alreadyExists) {
+            return previousLocations;
+          }
 
-      setRouteCoordinates((previousCoordinates) => [
-        ...previousCoordinates,
-        nextCoordinate,
-      ]);
+          return [...previousLocations, newLocation];
+        });
 
-      setCurrentPointIndex((previousIndex) => previousIndex + 1);
+        setIsBackendOnline(true);
+        setErrorMessage(null);
+      },
 
-      setLastUpdated(
-        new Date().toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        }),
-      );
-    }, 2000);
+      onOpen: () => {
+        setIsBackendOnline(true);
+        setIsSocketConnected(true);
+        setErrorMessage(null);
+      },
 
-    return () => clearTimeout(timer);
-  }, [isTracking, currentPointIndex]);
+      onClose: () => {
+        socketRef.current = null;
+        setIsSocketConnected(false);
+      },
 
-  const handleStartTracking = () => {
-    if (currentPointIndex >= mockRoute.length) {
-      Alert.alert(
-        "Route completed",
-        "Clear or refresh the route before starting again.",
-      );
-      return;
-    }
+      onError: () => {
+        setIsSocketConnected(false);
+        setErrorMessage("Live connection was interrupted.");
+      },
+    });
 
+    return () => {
+      socketRef.current?.close();
+      socketRef.current = null;
+      setIsSocketConnected(false);
+    };
+  }, [isTracking]);
+
+  const handleStartTracking = async () => {
+    await loadLocations();
     setIsTracking(true);
   };
 
@@ -68,13 +127,14 @@ export default function HomeScreen() {
     setIsTracking(false);
   };
 
-  const handleRefresh = () => {
-    setIsTracking(false);
-    setRouteCoordinates([]);
-    setCurrentPointIndex(0);
-    setLastUpdated("Not started");
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
 
-    Alert.alert("Route reset", "The mock route is ready to track again.");
+    try {
+      await loadLocations();
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const handleClearPath = () => {
@@ -86,14 +146,14 @@ export default function HomeScreen() {
       return;
     }
 
-    if (routeCoordinates.length === 0) {
-      Alert.alert("No path", "There is no travelled path to clear.");
+    if (locations.length === 0) {
+      Alert.alert("No path", "There is no path to clear.");
       return;
     }
 
     Alert.alert(
       "Clear travelled path",
-      "Are you sure you want to clear the current route?",
+      "This will permanently delete all stored location points.",
       [
         {
           text: "Cancel",
@@ -102,15 +162,30 @@ export default function HomeScreen() {
         {
           text: "Clear",
           style: "destructive",
-          onPress: () => {
-            setRouteCoordinates([]);
-            setCurrentPointIndex(0);
-            setLastUpdated("Not started");
+          onPress: async () => {
+            try {
+              await clearLocations();
+              setLocations([]);
+              setErrorMessage(null);
+            } catch {
+              Alert.alert(
+                "Clear failed",
+                "The stored path could not be cleared.",
+              );
+            }
           },
         },
       ],
     );
   };
+
+  const formattedTime = latestLocation
+    ? new Date(latestLocation.recorded_at).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    : "--";
 
   return (
     <SafeAreaView
@@ -124,6 +199,9 @@ export default function HomeScreen() {
           paddingTop: 16,
           paddingBottom: 40,
         }}
+        refreshControl={
+          <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
+        }
         showsVerticalScrollIndicator={false}
       >
         <View>
@@ -138,12 +216,27 @@ export default function HomeScreen() {
 
         <View className="mt-5 flex-row flex-wrap gap-3">
           <StatusBadge
-            label={isTracking ? "Tracking" : "Tracking Stopped"}
-            active={isTracking}
+            label={isBackendOnline ? "Backend Online" : "Backend Offline"}
+            active={isBackendOnline}
           />
 
-          <StatusBadge label="GPS Fixed" active={mockLocation.gpsFixed} />
+          <StatusBadge
+            label={
+              isTracking
+                ? isSocketConnected
+                  ? "Live Tracking"
+                  : "Connecting"
+                : "Tracking Stopped"
+            }
+            active={isTracking && isSocketConnected}
+          />
         </View>
+
+        {errorMessage && (
+          <View className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+            <Text className="font-medium text-red-700">{errorMessage}</Text>
+          </View>
+        )}
 
         <View className="mt-6">
           <TrackerMap coordinates={routeCoordinates} />
@@ -156,40 +249,49 @@ export default function HomeScreen() {
         <View className="flex-row flex-wrap justify-between gap-y-4">
           <InfoCard
             label="Latitude"
-            value={
-              latestCoordinate ? latestCoordinate.latitude.toFixed(6) : "--"
-            }
+            value={latestLocation ? latestLocation.latitude.toFixed(6) : "--"}
           />
 
           <InfoCard
             label="Longitude"
-            value={
-              latestCoordinate ? latestCoordinate.longitude.toFixed(6) : "--"
-            }
+            value={latestLocation ? latestLocation.longitude.toFixed(6) : "--"}
           />
 
           <InfoCard
             label="Speed"
             value={
-              isTracking ? `${mockLocation.speed.toFixed(1)} km/h` : "0.0 km/h"
+              latestLocation
+                ? `${latestLocation.speed.toFixed(1)} km/h`
+                : "0.0 km/h"
             }
           />
 
-          <InfoCard label="Last Updated" value={lastUpdated} />
+          <InfoCard label="Last Updated" value={formattedTime} />
         </View>
 
         <View className="mt-7">
           {!isTracking ? (
             <Pressable
               onPress={handleStartTracking}
-              className="items-center justify-center rounded-2xl bg-emerald-600 px-4 py-4 active:bg-emerald-700"
+              disabled={!isBackendOnline}
+              className={`items-center rounded-2xl px-4 py-4 ${
+                isBackendOnline
+                  ? "bg-emerald-600 active:bg-emerald-700"
+                  : "bg-slate-300"
+              }`}
             >
-              <Text className="font-bold text-white">Start Tracking</Text>
+              <Text
+                className={`font-bold ${
+                  isBackendOnline ? "text-white" : "text-slate-500"
+                }`}
+              >
+                Start Tracking
+              </Text>
             </Pressable>
           ) : (
             <Pressable
               onPress={handleStopTracking}
-              className="items-center justify-center rounded-2xl bg-orange-500 px-4 py-4 active:bg-orange-600"
+              className="items-center rounded-2xl bg-orange-500 px-4 py-4 active:bg-orange-600"
             >
               <Text className="font-bold text-white">Stop Tracking</Text>
             </Pressable>
@@ -199,23 +301,23 @@ export default function HomeScreen() {
         <View className="mt-3 flex-row gap-3">
           <Pressable
             onPress={handleRefresh}
-            className="flex-1 items-center justify-center rounded-2xl bg-blue-600 px-4 py-4 active:bg-blue-700"
+            className="flex-1 items-center rounded-2xl bg-blue-600 px-4 py-4 active:bg-blue-700"
           >
-            <Text className="font-bold text-white">Reset Route</Text>
+            <Text className="font-bold text-white">Refresh</Text>
           </Pressable>
 
           <Pressable
             onPress={handleClearPath}
-            disabled={routeCoordinates.length === 0}
-            className={`flex-1 items-center justify-center rounded-2xl border px-4 py-4 ${
-              routeCoordinates.length === 0
+            disabled={locations.length === 0 || isTracking}
+            className={`flex-1 items-center rounded-2xl border px-4 py-4 ${
+              locations.length === 0 || isTracking
                 ? "border-slate-200 bg-slate-100"
                 : "border-red-200 bg-red-50 active:bg-red-100"
             }`}
           >
             <Text
               className={`font-bold ${
-                routeCoordinates.length === 0
+                locations.length === 0 || isTracking
                   ? "text-slate-400"
                   : "text-red-600"
               }`}
