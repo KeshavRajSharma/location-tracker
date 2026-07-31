@@ -92,3 +92,14 @@ app-example/
 *.swo
 
 tracker.db
+
+# macOS ZIP metadata
+__MACOSX/
+._*
+
+# PlatformIO
+.pio/
+
+# ESP32 secrets and generated IDE files
+esp32/include/config.h
+esp32/.vscode/
