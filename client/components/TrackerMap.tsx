@@ -1,12 +1,25 @@
 import { useEffect, useRef } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import MapView, { Marker, Polyline } from "react-native-maps";
+import MapView, { Marker, Polyline, type Region } from "react-native-maps";
 
 import type { Coordinate } from "../types/location";
 
 interface TrackerMapProps {
   coordinates: Coordinate[];
 }
+
+/*
+ * Default map region shown while the ESP32 has not
+ * provided any valid GPS location.
+ *
+ * This currently shows the Kathmandu area.
+ */
+const DEFAULT_REGION: Region = {
+  latitude: 27.7172,
+  longitude: 85.324,
+  latitudeDelta: 0.08,
+  longitudeDelta: 0.08,
+};
 
 export default function TrackerMap({ coordinates }: TrackerMapProps) {
   const mapRef = useRef<MapView>(null);
@@ -16,6 +29,35 @@ export default function TrackerMap({ coordinates }: TrackerMapProps) {
   const latestLocation =
     coordinates.length > 0 ? coordinates[coordinates.length - 1] : null;
 
+  /*
+   * When the first GPS location becomes available,
+   * move the map immediately from the default region
+   * to the tracker location.
+   */
+  useEffect(() => {
+    if (coordinates.length !== 1 || !latestLocation) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      mapRef.current?.animateToRegion(
+        {
+          latitude: latestLocation.latitude,
+          longitude: latestLocation.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        },
+        700,
+      );
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [coordinates.length, latestLocation]);
+
+  /*
+   * When a route contains two or more points,
+   * resize the map so the complete route is visible.
+   */
   useEffect(() => {
     if (coordinates.length < 2) {
       return;
@@ -31,36 +73,26 @@ export default function TrackerMap({ coordinates }: TrackerMapProps) {
         },
         animated: true,
       });
-    }, 500);
+    }, 300);
 
     return () => clearTimeout(timer);
   }, [coordinates]);
-
-  if (!latestLocation) {
-    return (
-      <View className="h-72 items-center justify-center rounded-3xl border border-slate-200 bg-slate-100">
-        <Text className="text-lg font-bold text-slate-700">
-          No location available
-        </Text>
-
-        <Text className="mt-2 px-6 text-center text-sm text-slate-500">
-          GPS coordinates will appear here when tracking starts.
-        </Text>
-      </View>
-    );
-  }
 
   return (
     <View className="h-72 overflow-hidden rounded-3xl border border-slate-200 bg-slate-100">
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
-        initialRegion={{
-          latitude: latestLocation.latitude,
-          longitude: latestLocation.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        }}
+        initialRegion={
+          latestLocation
+            ? {
+                latitude: latestLocation.latitude,
+                longitude: latestLocation.longitude,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+              }
+            : DEFAULT_REGION
+        }
         loadingEnabled
         rotateEnabled={false}
         pitchEnabled={false}
@@ -77,7 +109,7 @@ export default function TrackerMap({ coordinates }: TrackerMapProps) {
           />
         )}
 
-        {startLocation && (
+        {coordinates.length > 1 && startLocation && (
           <Marker
             coordinate={startLocation}
             title="Starting point"
@@ -86,13 +118,32 @@ export default function TrackerMap({ coordinates }: TrackerMapProps) {
           />
         )}
 
-        <Marker
-          coordinate={latestLocation}
-          title="Current location"
-          description="Latest GPS coordinate"
-          pinColor="red"
-        />
+        {latestLocation && (
+          <Marker
+            coordinate={latestLocation}
+            title={
+              coordinates.length > 1 ? "Current location" : "Tracker location"
+            }
+            description="Latest ESP32 GPS coordinate"
+            pinColor="red"
+          />
+        )}
       </MapView>
+
+      {!latestLocation && (
+        <View
+          pointerEvents="none"
+          className="absolute bottom-4 left-4 right-4 rounded-2xl bg-white/95 px-4 py-3 shadow"
+        >
+          <Text className="text-center font-bold text-slate-800">
+            No GPS location available
+          </Text>
+
+          <Text className="mt-1 text-center text-sm text-slate-500">
+            Waiting for the ESP32 to provide its first valid GPS coordinate.
+          </Text>
+        </View>
+      )}
     </View>
   );
 }

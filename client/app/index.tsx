@@ -15,13 +15,26 @@ import TrackerMap from "../components/TrackerMap";
 import {
   checkBackendHealth,
   clearLocations,
-  getLocations,
+  getLatestLocation,
 } from "../services/api";
 import { connectLocationSocket } from "../services/socket";
 import type { ApiLocation, Coordinate } from "../types/location";
 
 export default function HomeScreen() {
-  const [locations, setLocations] = useState<ApiLocation[]>([]);
+  /*
+   * The most recent location received from the backend.
+   * This is also shown as the single marker when no route exists.
+   */
+  const [latestLocation, setLatestLocation] = useState<ApiLocation | null>(
+    null,
+  );
+
+  /*
+   * Contains only the points belonging to the current or
+   * most recently completed tracking session.
+   */
+  const [sessionLocations, setSessionLocations] = useState<ApiLocation[]>([]);
+
   const [isTracking, setIsTracking] = useState(false);
   const [isBackendOnline, setIsBackendOnline] = useState(false);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
@@ -30,55 +43,89 @@ export default function HomeScreen() {
 
   const socketRef = useRef<WebSocket | null>(null);
 
-  const latestLocation =
-    locations.length > 0 ? locations[locations.length - 1] : null;
+  /*
+   * Map behavior:
+   *
+   * No tracking session/path:
+   * Show only one latest-location marker.
+   *
+   * Active or stopped tracking session:
+   * Keep showing the complete session route until Clear Path.
+   */
+  const routeCoordinates: Coordinate[] =
+    sessionLocations.length > 0
+      ? sessionLocations.map(({ latitude, longitude }) => ({
+          latitude,
+          longitude,
+        }))
+      : latestLocation
+        ? [
+            {
+              latitude: latestLocation.latitude,
+              longitude: latestLocation.longitude,
+            },
+          ]
+        : [];
 
-  const routeCoordinates: Coordinate[] = locations.map(
-    ({ latitude, longitude }) => ({
-      latitude,
-      longitude,
-    }),
-  );
-
-  const loadLocations = useCallback(async () => {
+  /*
+   * Loads only the latest location.
+   * It never loads old location history.
+   */
+  const loadLatestLocation = useCallback(async () => {
     try {
       const backendOnline = await checkBackendHealth();
+
       setIsBackendOnline(backendOnline);
 
       if (!backendOnline) {
         setErrorMessage("Backend is currently unreachable.");
-        return;
+        return null;
       }
 
-      const locationHistory = await getLocations();
+      const location = await getLatestLocation();
 
-      setLocations(locationHistory);
+      setLatestLocation(location);
       setErrorMessage(null);
+
+      return location;
     } catch (error) {
       setIsBackendOnline(false);
+
       setErrorMessage(
         error instanceof Error
           ? error.message
           : "Unable to load location data.",
       );
+
+      return null;
     }
   }, []);
 
+  /*
+   * App startup:
+   * Load only one latest ESP32 location.
+   */
   useEffect(() => {
-    loadLocations();
-  }, [loadLocations]);
+    loadLatestLocation();
+  }, [loadLatestLocation]);
 
+  /*
+   * Connect to the location WebSocket only while tracking.
+   */
   useEffect(() => {
     if (!isTracking) {
       socketRef.current?.close();
       socketRef.current = null;
       setIsSocketConnected(false);
+
       return;
     }
 
-    socketRef.current = connectLocationSocket({
+    const socket = connectLocationSocket({
       onLocation: (newLocation) => {
-        setLocations((previousLocations) => {
+        setLatestLocation(newLocation);
+
+        setSessionLocations((previousLocations) => {
           const alreadyExists = previousLocations.some(
             (location) => location.id === newLocation.id,
           );
@@ -111,49 +158,78 @@ export default function HomeScreen() {
       },
     });
 
+    socketRef.current = socket;
+
     return () => {
-      socketRef.current?.close();
+      socket.close();
       socketRef.current = null;
       setIsSocketConnected(false);
     };
   }, [isTracking]);
 
+  /*
+   * Start a completely new tracking session.
+   * The latest ESP32 point becomes the green starting marker.
+   */
   const handleStartTracking = async () => {
-    await loadLocations();
+    const startingLocation = await loadLatestLocation();
+
+    if (!startingLocation) {
+      Alert.alert(
+        "GPS location unavailable",
+        "Wait until the ESP32 sends a valid GPS location.",
+      );
+
+      return;
+    }
+
+    setSessionLocations([startingLocation]);
     setIsTracking(true);
   };
 
+  /*
+   * Stop receiving live points.
+   * Do not remove the completed route.
+   */
   const handleStopTracking = () => {
     setIsTracking(false);
   };
 
+  /*
+   * Refresh only the latest location information.
+   * It does not load old database history.
+   */
   const handleRefresh = async () => {
     setIsRefreshing(true);
 
     try {
-      await loadLocations();
+      await loadLatestLocation();
     } finally {
       setIsRefreshing(false);
     }
   };
 
+  /*
+   * Remove the route while keeping one latest marker visible.
+   */
   const handleClearPath = () => {
     if (isTracking) {
       Alert.alert(
         "Stop tracking first",
         "Please stop tracking before clearing the path.",
       );
+
       return;
     }
 
-    if (locations.length === 0) {
+    if (!latestLocation && sessionLocations.length === 0) {
       Alert.alert("No path", "There is no path to clear.");
       return;
     }
 
     Alert.alert(
       "Clear travelled path",
-      "This will permanently delete all stored location points.",
+      "This will clear the travelled route while keeping the latest GPS position visible.",
       [
         {
           text: "Cancel",
@@ -162,10 +238,26 @@ export default function HomeScreen() {
         {
           text: "Clear",
           style: "destructive",
+
           onPress: async () => {
             try {
+              /*
+               * Preserve the final location before deleting
+               * the stored backend records.
+               */
+              const preservedLocation =
+                latestLocation ??
+                sessionLocations[sessionLocations.length - 1] ??
+                null;
+
               await clearLocations();
-              setLocations([]);
+
+              /*
+               * Remove the route but continue displaying
+               * one marker at the latest known position.
+               */
+              setSessionLocations([]);
+              setLatestLocation(preservedLocation);
               setErrorMessage(null);
             } catch {
               Alert.alert(
@@ -186,6 +278,8 @@ export default function HomeScreen() {
         second: "2-digit",
       })
     : "--";
+
+  const hasLocation = latestLocation !== null || sessionLocations.length > 0;
 
   return (
     <SafeAreaView
@@ -260,9 +354,9 @@ export default function HomeScreen() {
           <InfoCard
             label="Speed"
             value={
-              latestLocation
+              isTracking && latestLocation
                 ? `${latestLocation.speed.toFixed(1)} km/h`
-                : "0.0 km/h"
+                : "--"
             }
           />
 
@@ -308,18 +402,16 @@ export default function HomeScreen() {
 
           <Pressable
             onPress={handleClearPath}
-            disabled={locations.length === 0 || isTracking}
+            disabled={!hasLocation || isTracking}
             className={`flex-1 items-center rounded-2xl border px-4 py-4 ${
-              locations.length === 0 || isTracking
+              !hasLocation || isTracking
                 ? "border-slate-200 bg-slate-100"
                 : "border-red-200 bg-red-50 active:bg-red-100"
             }`}
           >
             <Text
               className={`font-bold ${
-                locations.length === 0 || isTracking
-                  ? "text-slate-400"
-                  : "text-red-600"
+                !hasLocation || isTracking ? "text-slate-400" : "text-red-600"
               }`}
             >
               Clear Path
