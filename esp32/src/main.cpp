@@ -1,18 +1,26 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <HTTPClient.h>
 #include <TinyGPSPlus.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+#include "api_client.h"
 #include "config.h"
+#include "location_filter.h"
 
-// GPS pins
+// --------------------------------------------------
+// GPS configuration
+// --------------------------------------------------
+
 constexpr int GPS_RX_PIN = 16;
 constexpr int GPS_TX_PIN = 17;
+constexpr unsigned long GPS_MAX_AGE_MS = 5000;
 
-// OLED pins
+// --------------------------------------------------
+// OLED configuration
+// --------------------------------------------------
+
 constexpr int OLED_SDA_PIN = 21;
 constexpr int OLED_SCL_PIN = 22;
 
@@ -21,10 +29,18 @@ constexpr int SCREEN_HEIGHT = 64;
 constexpr int OLED_RESET = -1;
 constexpr uint8_t OLED_ADDRESS = 0x3C;
 
-// Timing
+// --------------------------------------------------
+// Timing configuration
+// --------------------------------------------------
+
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
 constexpr unsigned long WIFI_RETRY_INTERVAL_MS = 10000;
 constexpr unsigned long HEALTH_CHECK_INTERVAL_MS = 15000;
+constexpr unsigned long LOCATION_CHECK_INTERVAL_MS = 2000;
+
+// --------------------------------------------------
+// Hardware objects
+// --------------------------------------------------
 
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(2);
@@ -36,13 +52,22 @@ Adafruit_SSD1306 display(
     OLED_RESET
 );
 
+// --------------------------------------------------
+// Application state
+// --------------------------------------------------
+
 unsigned long lastWiFiRetryAt = 0;
 unsigned long lastHealthCheckAt = 0;
+unsigned long lastLocationCheckAt = 0;
 
 bool backendOnline = false;
+bool lastLocationSent = false;
+
+double displayedSpeedKmph = 0.0;
+double lastAcceptedDistanceMeters = 0.0;
 
 // --------------------------------------------------
-// OLED
+// OLED functions
 // --------------------------------------------------
 
 void showMessage(
@@ -80,8 +105,9 @@ void showGpsData() {
   display.println(gps.location.lng(), 6);
 
   display.setCursor(0, 26);
-  display.print("RAW SPD: ");
-  display.print(gps.speed.kmph(), 1);
+  display.print("SPD: ");
+  display.print(displayedSpeedKmph, 1);
+  display.println(" km/h");
 
   display.setCursor(0, 39);
   display.print("SAT: ");
@@ -91,20 +117,23 @@ void showGpsData() {
 
   if (WiFi.status() != WL_CONNECTED) {
     display.print("WiFi: Offline");
-  } else if (backendOnline) {
-    display.print("Backend: Online");
-  } else {
+  } else if (!backendOnline) {
     display.print("Backend: Offline");
+  } else if (lastLocationSent) {
+    display.print("Location: Sent");
+  } else {
+    display.print("Waiting movement");
   }
 
   display.display();
 }
 
 // --------------------------------------------------
-// Wi-Fi
+// Wi-Fi functions
 // --------------------------------------------------
 
 bool connectToWiFi() {
+  Serial.println();
   Serial.print("Connecting to Wi-Fi: ");
   Serial.println(WIFI_SSID);
 
@@ -135,7 +164,7 @@ bool connectToWiFi() {
     showMessage(
         "WiFi failed",
         "GPS still works",
-        "Retrying..."
+        "Will retry..."
     );
 
     return false;
@@ -143,14 +172,12 @@ bool connectToWiFi() {
 
   Serial.println("Wi-Fi connected.");
 
-  Serial.print("ESP32 IP: ");
+  Serial.print("ESP32 IP address: ");
   Serial.println(WiFi.localIP());
 
-  showMessage(
-      "WiFi connected",
-      WiFi.localIP().toString(),
-      "Checking backend..."
-  );
+  Serial.print("Signal strength: ");
+  Serial.print(WiFi.RSSI());
+  Serial.println(" dBm");
 
   return true;
 }
@@ -161,10 +188,14 @@ void maintainWiFiConnection() {
   }
 
   backendOnline = false;
+  lastLocationSent = false;
 
   const unsigned long now = millis();
 
-  if (now - lastWiFiRetryAt < WIFI_RETRY_INTERVAL_MS) {
+  if (
+      now - lastWiFiRetryAt <
+      WIFI_RETRY_INTERVAL_MS
+  ) {
     return;
   }
 
@@ -177,55 +208,13 @@ void maintainWiFiConnection() {
 }
 
 // --------------------------------------------------
-// FastAPI health check
+// GPS functions
 // --------------------------------------------------
 
-bool checkBackendHealth() {
-  if (WiFi.status() != WL_CONNECTED) {
-    backendOnline = false;
-    return false;
-  }
-
-  HTTPClient http;
-
-  const String healthUrl =
-      "http://" +
-      String(SERVER_IP) +
-      ":" +
-      String(SERVER_PORT) +
-      "/health";
-
-  Serial.print("Checking backend: ");
-  Serial.println(healthUrl);
-
-  http.setConnectTimeout(5000);
-  http.setTimeout(5000);
-  http.begin(healthUrl);
-
-  const int statusCode = http.GET();
-
-  if (statusCode == 200) {
-    const String response = http.getString();
-
-    Serial.print("Backend response: ");
-    Serial.println(response);
-
-    backendOnline = true;
-  } else {
-    Serial.print("Backend health check failed. HTTP code: ");
-    Serial.println(statusCode);
-
-    backendOnline = false;
-  }
-
-  http.end();
-
-  return backendOnline;
+bool hasUsableGpsLocation() {
+  return gps.location.isValid() &&
+         gps.location.age() <= GPS_MAX_AGE_MS;
 }
-
-// --------------------------------------------------
-// GPS Serial output
-// --------------------------------------------------
 
 void printGpsDataToSerial() {
   Serial.println("----------------------------");
@@ -236,15 +225,82 @@ void printGpsDataToSerial() {
   Serial.print("Longitude: ");
   Serial.println(gps.location.lng(), 6);
 
-  Serial.print("Raw GPS speed: ");
-  Serial.print(gps.speed.kmph(), 1);
+  Serial.print("Filtered speed: ");
+  Serial.print(displayedSpeedKmph, 2);
   Serial.println(" km/h");
+
+  Serial.print("Last accepted distance: ");
+  Serial.print(lastAcceptedDistanceMeters, 2);
+  Serial.println(" m");
 
   Serial.print("Satellites: ");
   Serial.println(gps.satellites.value());
 
   Serial.print("Backend: ");
-  Serial.println(backendOnline ? "Online" : "Offline");
+  Serial.println(
+      backendOnline ? "Online" : "Offline"
+  );
+}
+
+// --------------------------------------------------
+// Location processing
+// --------------------------------------------------
+
+void processCurrentLocation() {
+  if (!hasUsableGpsLocation()) {
+    Serial.println(
+        "Location skipped: waiting for valid GPS fix."
+    );
+
+    lastLocationSent = false;
+    return;
+  }
+
+  const double latitude = gps.location.lat();
+  const double longitude = gps.location.lng();
+
+  const FilteredLocation filtered =
+      filterLocation(
+          latitude,
+          longitude,
+          millis()
+      );
+
+  if (!filtered.accepted) {
+    displayedSpeedKmph = filtered.speedKmph;
+    lastLocationSent = false;
+
+    Serial.print("Location rejected or ignored. Distance: ");
+    Serial.print(filtered.distanceMeters, 2);
+    Serial.println(" m");
+
+    return;
+  }
+
+  displayedSpeedKmph = filtered.speedKmph;
+  lastAcceptedDistanceMeters =
+      filtered.distanceMeters;
+
+  if (!backendOnline) {
+    Serial.println(
+        "Accepted location not sent: backend offline."
+    );
+
+    lastLocationSent = false;
+    return;
+  }
+
+  lastLocationSent = sendLocation(
+      filtered.latitude,
+      filtered.longitude,
+      filtered.speedKmph
+  );
+
+  if (lastLocationSent) {
+    Serial.println("Filtered GPS location saved.");
+  } else {
+    Serial.println("Filtered GPS location failed.");
+  }
 }
 
 // --------------------------------------------------
@@ -255,6 +311,9 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
+  Serial.println();
+  Serial.println("ESP32 tracker starting...");
+
   gpsSerial.begin(
       9600,
       SERIAL_8N1,
@@ -262,7 +321,10 @@ void setup() {
       GPS_TX_PIN
   );
 
-  Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
+  Wire.begin(
+      OLED_SDA_PIN,
+      OLED_SCL_PIN
+  );
 
   if (!display.begin(
           SSD1306_SWITCHCAPVCC,
@@ -278,22 +340,21 @@ void setup() {
   display.clearDisplay();
   display.display();
 
-  Serial.println("ESP32 tracker started.");
+  resetLocationFilter();
 
-  connectToWiFi();
-  checkBackendHealth();
+  const bool wifiConnected = connectToWiFi();
+
+  if (wifiConnected) {
+    backendOnline = checkBackendHealth();
+  }
 
   showMessage(
-      "Tracker ready",
-      WiFi.status() == WL_CONNECTED
-          ? "WiFi connected"
-          : "WiFi offline",
+      "Live GPS Tracker",
+      "Waiting for GPS...",
       backendOnline
           ? "Backend online"
           : "Backend offline"
   );
-
-  delay(2000);
 }
 
 // --------------------------------------------------
@@ -314,7 +375,15 @@ void loop() {
       HEALTH_CHECK_INTERVAL_MS
   ) {
     lastHealthCheckAt = now;
-    checkBackendHealth();
+    backendOnline = checkBackendHealth();
+  }
+
+  if (
+      now - lastLocationCheckAt >=
+      LOCATION_CHECK_INTERVAL_MS
+  ) {
+    lastLocationCheckAt = now;
+    processCurrentLocation();
   }
 
   if (
@@ -330,7 +399,7 @@ void loop() {
       gps.charsProcessed() < 10
   ) {
     Serial.println(
-        "No GPS data received. Check wiring."
+        "No GPS data received. Check wiring and baud rate."
     );
 
     delay(2000);
