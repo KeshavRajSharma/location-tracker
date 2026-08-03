@@ -49,14 +49,16 @@ NEO-6M GPS Module
       React Native Mobile App
 ```
 
+The ESP32 acts as an HTTP client. The FastAPI application running on the laptop is the server.
+
 ---
 
 ## How the System Works
 
 1. The NEO-6M GPS module receives location information from satellites.
 2. The ESP32 reads latitude and longitude values from the GPS module.
-3. GPS drift, small coordinate changes, and unrealistic movements are filtered.
-4. Valid location data is sent to the FastAPI backend through an HTTP request.
+3. GPS quality, drift, unrealistic jumps, and movement state are evaluated on the ESP32.
+4. Accepted location data is sent to the FastAPI backend through an HTTP POST request.
 5. The backend stores the location in an SQLite database.
 6. The backend broadcasts new location data through WebSocket.
 7. The mobile application receives the location and updates the map.
@@ -84,17 +86,19 @@ NEO-6M GPS Module
 - Automatically focuses on the first valid GPS location
 - Shows backend and live-tracking connection status
 - Supports manual refresh
+- Displays the last-updated timestamp in Nepal time
 
 ### ESP32 Tracker
 
 - Connects to Wi-Fi
 - Checks backend availability
 - Reads GPS data
-- Calculates movement speed
-- Filters small GPS coordinate changes
-- Rejects unrealistic movement
-- Requires consecutive movement readings
-- Sends accepted data to the backend
+- Uses GPS speed-over-ground with coordinate-based speed as a fallback
+- Processes only fresh GPS fixes
+- Filters drift using stationary and moving states
+- Rejects weak GPS quality and unrealistic position jumps
+- Requires consecutive readings to confirm starting and stopping
+- Sends accepted data and a final `0.0 km/h` update to the backend
 - Displays system information on the OLED screen
 - Automatically reconnects to Wi-Fi when disconnected
 
@@ -125,11 +129,11 @@ NEO-6M GPS Module
 
 ---
 
-<!-- ## Hardware Setup
+## Hardware Setup
 
 <p align="center">
   <img src="assets/hardware-setup.jpg" alt="ESP32 GPS Tracker Hardware Setup" width="700">
-</p> -->
+</p>
 
 The hardware consists of an ESP32 development board connected to a NEO-6M GPS module and an SSD1306 OLED display.
 
@@ -451,55 +455,68 @@ The ESP32 sends GPS data to the backend in JSON format:
 
 ## GPS Speed Calculation
 
-The tracker calculates speed using the distance between two accepted GPS positions.
+The tracker prefers the **speed-over-ground value reported by the NEO-6M GPS module** when that value is valid and within the allowed range.
 
-Both latitude and longitude changes are used.
+If GPS speed is unavailable, the ESP32 calculates speed from two GPS positions:
 
 ```text
 Speed = Distance travelled ÷ Elapsed time
 ```
 
-The calculated speed is initially measured in metres per second and then converted to kilometres per hour:
+The calculated value is converted from metres per second to kilometres per hour:
 
 ```text
 Speed in km/h = Speed in m/s × 3.6
 ```
 
-The project uses the following TinyGPSPlus function to calculate geographic distance:
+Distance is calculated from the previous and current latitude-longitude coordinates using:
 
 ```cpp
 TinyGPSPlus::distanceBetween(...)
 ```
 
-This function calculates the distance between the previous latitude-longitude pair and the latest latitude-longitude pair.
+Both latitude and longitude are used when calculating the geographic distance.
 
 ---
 
 ## GPS Filtering
 
-GPS modules can report small coordinate changes even when the device is stationary. This behaviour is known as GPS drift.
+GPS coordinates can change slightly even when the tracker is stationary. This is known as GPS drift and is especially common indoors.
 
-The project applies movement filtering to reduce false movement and unstable speed values.
+The current filter uses separate **stationary** and **moving** states:
 
 ```cpp
-constexpr double MIN_MOVEMENT_METERS = 2.5;
-constexpr double MAX_WALKING_SPEED_KMPH = 3.0;
-constexpr double SPEED_SMOOTHING_FACTOR = 0.20;
-constexpr int REQUIRED_MOVEMENT_READINGS = 3;
+constexpr double START_MOVEMENT_METERS = 3.0;
+constexpr double TRACK_POINT_METERS = 1.5;
+constexpr double STOP_DISTANCE_METERS = 1.5;
+
+constexpr double MIN_MOVING_SPEED_KMPH = 0.8;
+constexpr double STOP_SPEED_KMPH = 0.6;
+constexpr double MAX_VALID_SPEED_KMPH = 12.0;
+constexpr double MAX_POSITION_JUMP_KMPH = 20.0;
+
+constexpr double SPEED_SMOOTHING_FACTOR = 0.35;
+
+constexpr int START_CONFIRMATION_READINGS = 2;
+constexpr int STOP_CONFIRMATION_READINGS = 3;
+
+constexpr unsigned int MIN_SATELLITES = 4;
+constexpr double MAX_HDOP = 6.0;
 ```
 
 ### Filtering Process
 
-- Movement below `2.5 metres` is treated as GPS noise
-- Speed above `3.0 km/h` is rejected
-- Three consecutive valid movement readings are required
-- Sudden speed changes are smoothed
-- Invalid coordinates are rejected
-- Only accepted points are sent to the backend
+- The first reliable GPS point becomes the reference location
+- At least four satellites are required
+- HDOP values above the configured limit are rejected
+- Two valid readings are required before entering the moving state
+- While moving, meaningful route points are accepted without restarting movement confirmation each time
+- Three low-movement readings are required before returning to the stationary state
+- Large position jumps and unrealistic speeds are rejected
+- Speed changes are smoothed before transmission
+- One final `0.0 km/h` update is sent when movement stops
 
-These values are configured for a small classroom walking demonstration.
-
-> A maximum speed of `3.0 km/h` may reject faster normal walking. It can be increased when testing in a larger outdoor area.
+The values are intended for a walking-tracker demonstration. Indoor GPS results can still vary because software filtering cannot fully correct weak or reflected satellite signals.
 
 ---
 
@@ -739,11 +756,12 @@ Check that:
 
 Possible reasons include:
 
-- Movement is below `2.5 metres`
-- Three consecutive readings have not yet been confirmed
-- Walking speed exceeds the configured `3.0 km/h` limit
-- GPS readings are being rejected as inaccurate
-- The elapsed movement interval is too short
+- The start movement distance has not been reached
+- Two valid start-confirmation readings have not yet been received
+- Satellite count is below the configured minimum
+- HDOP indicates weak GPS quality
+- Speed or position change is outside the accepted range
+- The GPS module is not producing fresh fixes
 
 ---
 
@@ -757,15 +775,13 @@ Possible causes include:
 - Reflected GPS signals
 - A coordinate jump greater than the minimum movement threshold
 
-The consecutive-reading filter reduces this behaviour, but low-cost GPS modules may still occasionally report inaccurate movement.
+The moving/stationary state filter reduces this behaviour, but a low-cost GPS module may still occasionally report inaccurate indoor movement.
 
 ---
 
 ### Route Does Not Appear Immediately
 
-The filter requires three consecutive valid movement readings.
-
-Therefore, the first few coordinate changes may be ignored before the route begins updating.
+The filter requires two valid readings before it enters the moving state. After movement starts, new route points are accepted when the configured route-point distance is reached.
 
 ---
 
@@ -804,4 +820,4 @@ This project was developed as an academic prototype to demonstrate the integrati
 - Real-time map visualization
 - Hardware and software integration
 
-The system demonstrates how an IoT GPS device can communicate with a backend server and provide live location updates to a mobile application.
+The project demonstrates an end-to-end IoT workflow in which an ESP32 GPS device sends filtered location data to a backend server and the backend delivers live updates to a mobile application.

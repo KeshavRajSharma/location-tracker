@@ -15,6 +15,7 @@
 
 constexpr int GPS_RX_PIN = 16;
 constexpr int GPS_TX_PIN = 17;
+
 constexpr unsigned long GPS_MAX_AGE_MS = 5000;
 
 // --------------------------------------------------
@@ -26,6 +27,7 @@ constexpr int OLED_SCL_PIN = 22;
 
 constexpr int SCREEN_WIDTH = 128;
 constexpr int SCREEN_HEIGHT = 64;
+
 constexpr int OLED_RESET = -1;
 constexpr uint8_t OLED_ADDRESS = 0x3C;
 
@@ -35,8 +37,14 @@ constexpr uint8_t OLED_ADDRESS = 0x3C;
 
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
 constexpr unsigned long WIFI_RETRY_INTERVAL_MS = 10000;
+
 constexpr unsigned long HEALTH_CHECK_INTERVAL_MS = 15000;
-constexpr unsigned long LOCATION_CHECK_INTERVAL_MS = 2000;
+
+/*
+ * NEO-6M normally provides approximately one location
+ * update each second, so one-second processing is suitable.
+ */
+constexpr unsigned long LOCATION_CHECK_INTERVAL_MS = 1000;
 
 // --------------------------------------------------
 // Hardware objects
@@ -60,8 +68,13 @@ unsigned long lastWiFiRetryAt = 0;
 unsigned long lastHealthCheckAt = 0;
 unsigned long lastLocationCheckAt = 0;
 
+unsigned long lastProcessedGpsTime = 0xFFFFFFFFUL;
+
 bool backendOnline = false;
 bool lastLocationSent = false;
+
+bool trackerMoving = false;
+bool gpsQualityAccepted = false;
 
 double displayedSpeedKmph = 0.0;
 double lastAcceptedDistanceMeters = 0.0;
@@ -111,7 +124,11 @@ void showGpsData() {
 
   display.setCursor(0, 39);
   display.print("SAT: ");
-  display.println(gps.satellites.value());
+  display.println(
+      gps.satellites.isValid()
+          ? gps.satellites.value()
+          : 0
+  );
 
   display.setCursor(0, 52);
 
@@ -119,10 +136,14 @@ void showGpsData() {
     display.print("WiFi: Offline");
   } else if (!backendOnline) {
     display.print("Backend: Offline");
+  } else if (!gpsQualityAccepted) {
+    display.print("GPS: Weak signal");
   } else if (lastLocationSent) {
     display.print("Location: Sent");
+  } else if (trackerMoving) {
+    display.print("Tracking...");
   } else {
-    display.print("Waiting movement");
+    display.print("Stationary");
   }
 
   display.display();
@@ -216,6 +237,28 @@ bool hasUsableGpsLocation() {
          gps.location.age() <= GPS_MAX_AGE_MS;
 }
 
+bool hasNewGpsFix() {
+  if (!gps.location.isUpdated()) {
+    return false;
+  }
+
+  /*
+   * GPS time helps prevent processing the same fix twice.
+   */
+  if (gps.time.isValid()) {
+    const unsigned long currentGpsTime =
+        gps.time.value();
+
+    if (currentGpsTime == lastProcessedGpsTime) {
+      return false;
+    }
+
+    lastProcessedGpsTime = currentGpsTime;
+  }
+
+  return true;
+}
+
 void printGpsDataToSerial() {
   Serial.println("----------------------------");
 
@@ -224,6 +267,15 @@ void printGpsDataToSerial() {
 
   Serial.print("Longitude: ");
   Serial.println(gps.location.lng(), 6);
+
+  Serial.print("GPS raw speed: ");
+
+  if (gps.speed.isValid()) {
+    Serial.print(gps.speed.kmph(), 2);
+    Serial.println(" km/h");
+  } else {
+    Serial.println("Unavailable");
+  }
 
   Serial.print("Filtered speed: ");
   Serial.print(displayedSpeedKmph, 2);
@@ -234,11 +286,32 @@ void printGpsDataToSerial() {
   Serial.println(" m");
 
   Serial.print("Satellites: ");
-  Serial.println(gps.satellites.value());
+  Serial.println(
+      gps.satellites.isValid()
+          ? gps.satellites.value()
+          : 0
+  );
+
+  Serial.print("HDOP: ");
+
+  if (gps.hdop.isValid()) {
+    Serial.println(gps.hdop.hdop(), 2);
+  } else {
+    Serial.println("Unavailable");
+  }
+
+  Serial.print("Motion state: ");
+  Serial.println(
+      trackerMoving
+          ? "Moving"
+          : "Stationary"
+  );
 
   Serial.print("Backend: ");
   Serial.println(
-      backendOnline ? "Online" : "Offline"
+      backendOnline
+          ? "Online"
+          : "Offline"
   );
 }
 
@@ -249,44 +322,75 @@ void printGpsDataToSerial() {
 void processCurrentLocation() {
   if (!hasUsableGpsLocation()) {
     Serial.println(
-        "Location skipped: waiting for valid GPS fix."
+        "Location skipped: waiting for a valid GPS fix."
     );
 
     lastLocationSent = false;
+    gpsQualityAccepted = false;
+
     return;
   }
 
   const double latitude = gps.location.lat();
   const double longitude = gps.location.lng();
 
+  const bool gpsSpeedValid =
+      gps.speed.isValid();
+
+  const double gpsSpeedKmph =
+      gpsSpeedValid
+          ? gps.speed.kmph()
+          : 0.0;
+
+  const unsigned int satellites =
+      gps.satellites.isValid()
+          ? gps.satellites.value()
+          : 0;
+
+  const bool hdopValid =
+      gps.hdop.isValid();
+
+  const double hdop =
+      hdopValid
+          ? gps.hdop.hdop()
+          : 0.0;
+
   const FilteredLocation filtered =
       filterLocation(
           latitude,
           longitude,
+          gpsSpeedKmph,
+          gpsSpeedValid,
+          satellites,
+          hdop,
+          hdopValid,
           millis()
       );
 
+  displayedSpeedKmph = filtered.speedKmph;
+  trackerMoving = filtered.moving;
+  gpsQualityAccepted = filtered.qualityAccepted;
+
   if (!filtered.accepted) {
-    displayedSpeedKmph = filtered.speedKmph;
     lastLocationSent = false;
 
-    Serial.print("Location rejected or ignored. Distance: ");
+    Serial.print("Point not sent. Distance: ");
     Serial.print(filtered.distanceMeters, 2);
     Serial.println(" m");
 
     return;
   }
 
-  displayedSpeedKmph = filtered.speedKmph;
   lastAcceptedDistanceMeters =
       filtered.distanceMeters;
 
   if (!backendOnline) {
     Serial.println(
-        "Accepted location not sent: backend offline."
+        "Accepted point not sent: backend offline."
     );
 
     lastLocationSent = false;
+
     return;
   }
 
@@ -297,9 +401,11 @@ void processCurrentLocation() {
   );
 
   if (lastLocationSent) {
-    Serial.println("Filtered GPS location saved.");
+    Serial.print("Location sent. Speed: ");
+    Serial.print(filtered.speedKmph, 2);
+    Serial.println(" km/h");
   } else {
-    Serial.println("Filtered GPS location failed.");
+    Serial.println("Location transmission failed.");
   }
 }
 
@@ -342,10 +448,12 @@ void setup() {
 
   resetLocationFilter();
 
-  const bool wifiConnected = connectToWiFi();
+  const bool wifiConnected =
+      connectToWiFi();
 
   if (wifiConnected) {
-    backendOnline = checkBackendHealth();
+    backendOnline =
+        checkBackendHealth();
   }
 
   showMessage(
@@ -375,21 +483,22 @@ void loop() {
       HEALTH_CHECK_INTERVAL_MS
   ) {
     lastHealthCheckAt = now;
-    backendOnline = checkBackendHealth();
+
+    backendOnline =
+        checkBackendHealth();
   }
 
+  /*
+   * Process only a new GPS fix and at most once per second.
+   */
   if (
       now - lastLocationCheckAt >=
-      LOCATION_CHECK_INTERVAL_MS
+          LOCATION_CHECK_INTERVAL_MS &&
+      hasNewGpsFix()
   ) {
     lastLocationCheckAt = now;
-    processCurrentLocation();
-  }
 
-  if (
-      gps.location.isUpdated() &&
-      gps.location.isValid()
-  ) {
+    processCurrentLocation();
     printGpsDataToSerial();
     showGpsData();
   }

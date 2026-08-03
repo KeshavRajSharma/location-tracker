@@ -6,7 +6,11 @@ struct FilteredLocation {
   double longitude;
   double speedKmph;
   double distanceMeters;
+
   bool accepted;
+  bool stationary;
+  bool moving;
+  bool qualityAccepted;
 };
 
 void resetLocationFilter();
@@ -14,6 +18,11 @@ void resetLocationFilter();
 FilteredLocation filterLocation(
     double latitude,
     double longitude,
+    double gpsSpeedKmph,
+    bool gpsSpeedValid,
+    unsigned int satellites,
+    double hdop,
+    bool hdopValid,
     unsigned long timestampMs
 );
 

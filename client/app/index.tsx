@@ -21,18 +21,10 @@ import { connectLocationSocket } from "../services/socket";
 import type { ApiLocation, Coordinate } from "../types/location";
 
 export default function HomeScreen() {
-  /*
-   * The most recent location received from the backend.
-   * This is also shown as the single marker when no route exists.
-   */
   const [latestLocation, setLatestLocation] = useState<ApiLocation | null>(
     null,
   );
 
-  /*
-   * Contains only the points belonging to the current or
-   * most recently completed tracking session.
-   */
   const [sessionLocations, setSessionLocations] = useState<ApiLocation[]>([]);
 
   const [isTracking, setIsTracking] = useState(false);
@@ -44,13 +36,8 @@ export default function HomeScreen() {
   const socketRef = useRef<WebSocket | null>(null);
 
   /*
-   * Map behavior:
-   *
-   * No tracking session/path:
-   * Show only one latest-location marker.
-   *
-   * Active or stopped tracking session:
-   * Keep showing the complete session route until Clear Path.
+   * Show the active or completed route while it exists.
+   * Otherwise, show only the latest GPS marker.
    */
   const routeCoordinates: Coordinate[] =
     sessionLocations.length > 0
@@ -68,8 +55,8 @@ export default function HomeScreen() {
         : [];
 
   /*
-   * Loads only the latest location.
-   * It never loads old location history.
+   * Load only the latest saved ESP32 location.
+   * Old location history is not loaded when the app opens.
    */
   const loadLatestLocation = useCallback(async () => {
     try {
@@ -102,15 +89,14 @@ export default function HomeScreen() {
   }, []);
 
   /*
-   * App startup:
-   * Load only one latest ESP32 location.
+   * Load one latest point when the application opens.
    */
   useEffect(() => {
     loadLatestLocation();
   }, [loadLatestLocation]);
 
   /*
-   * Connect to the location WebSocket only while tracking.
+   * Open the WebSocket only while tracking is active.
    */
   useEffect(() => {
     if (!isTracking) {
@@ -168,8 +154,7 @@ export default function HomeScreen() {
   }, [isTracking]);
 
   /*
-   * Start a completely new tracking session.
-   * The latest ESP32 point becomes the green starting marker.
+   * Start a fresh route from the latest available GPS point.
    */
   const handleStartTracking = async () => {
     const startingLocation = await loadLatestLocation();
@@ -188,16 +173,15 @@ export default function HomeScreen() {
   };
 
   /*
-   * Stop receiving live points.
-   * Do not remove the completed route.
+   * Stop receiving new WebSocket points.
+   * Keep the completed route visible.
    */
   const handleStopTracking = () => {
     setIsTracking(false);
   };
 
   /*
-   * Refresh only the latest location information.
-   * It does not load old database history.
+   * Refresh only the latest GPS location.
    */
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -210,7 +194,7 @@ export default function HomeScreen() {
   };
 
   /*
-   * Remove the route while keeping one latest marker visible.
+   * Clear the route while preserving one latest marker locally.
    */
   const handleClearPath = () => {
     if (isTracking) {
@@ -241,10 +225,6 @@ export default function HomeScreen() {
 
           onPress: async () => {
             try {
-              /*
-               * Preserve the final location before deleting
-               * the stored backend records.
-               */
               const preservedLocation =
                 latestLocation ??
                 sessionLocations[sessionLocations.length - 1] ??
@@ -252,10 +232,6 @@ export default function HomeScreen() {
 
               await clearLocations();
 
-              /*
-               * Remove the route but continue displaying
-               * one marker at the latest known position.
-               */
               setSessionLocations([]);
               setLatestLocation(preservedLocation);
               setErrorMessage(null);
@@ -271,13 +247,37 @@ export default function HomeScreen() {
     );
   };
 
+  /*
+   * The backend timestamp may be UTC without a timezone suffix.
+   * Add "Z" only when no timezone information is already present.
+   */
+  const normalizeUtcTimestamp = (timestamp: string) => {
+    const hasTimezone =
+      timestamp.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(timestamp);
+
+    return hasTimezone ? timestamp : `${timestamp}Z`;
+  };
+
+  /*
+   * Display the backend UTC timestamp in Nepal time.
+   */
   const formattedTime = latestLocation
-    ? new Date(latestLocation.recorded_at).toLocaleTimeString([], {
+    ? new Date(
+        normalizeUtcTimestamp(latestLocation.recorded_at),
+      ).toLocaleTimeString("en-US", {
+        timeZone: "Asia/Kathmandu",
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
+        hour12: true,
       })
     : "--";
+
+  /*
+   * Treat very small speeds as stationary.
+   */
+  const displayedSpeed =
+    latestLocation && latestLocation.speed >= 0.5 ? latestLocation.speed : 0;
 
   const hasLocation = latestLocation !== null || sessionLocations.length > 0;
 
@@ -355,7 +355,7 @@ export default function HomeScreen() {
             label="Speed"
             value={
               isTracking && latestLocation
-                ? `${latestLocation.speed.toFixed(1)} km/h`
+                ? `${displayedSpeed.toFixed(1)} km/h`
                 : "--"
             }
           />
