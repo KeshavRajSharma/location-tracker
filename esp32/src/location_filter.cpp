@@ -5,80 +5,93 @@
 
 namespace {
 
-/*
- * Movement must reach this distance before the tracker
- * begins considering the device as moving.
- */
-constexpr double START_MOVEMENT_METERS = 2.0;
+// --------------------------------------------------
+// Balanced settings for a walking/corridor demonstration
+// --------------------------------------------------
 
 /*
- * Once movement is confirmed, a new route point is accepted
- * after approximately this much additional movement.
+ * Distance from the last accepted route point required
+ * before starting to confirm movement.
+ */
+constexpr double START_MOVEMENT_METERS = 2.5;
+
+/*
+ * Distance from the last accepted route point required
+ * before sending another route point.
  */
 constexpr double TRACK_POINT_METERS = 1.5;
 
 /*
- * Distance below this value can help confirm that
- * the tracker has stopped.
+ * Consecutive-fix distance below this value helps confirm
+ * that the tracker has stopped.
  */
-constexpr double STOP_DISTANCE_METERS = 1.0;
+constexpr double STOP_DISTANCE_METERS = 1.2;
 
 /*
- * Minimum useful movement speed.
- * Lower values are treated as stationary noise.
+ * Minimum useful moving speed.
  */
-constexpr double MIN_MOVING_SPEED_KMPH = 0.5;
+constexpr double MIN_MOVING_SPEED_KMPH = 0.4;
 
 /*
- * Used to confirm that the device has stopped.
+ * GPS speed below this value helps confirm stopping.
  */
-constexpr double STOP_SPEED_KMPH = 0.4;
+constexpr double STOP_SPEED_KMPH = 0.3;
 
 /*
- * Maximum valid speed for this walking tracker.
+ * Maximum accepted walking/running speed.
  */
 constexpr double MAX_VALID_SPEED_KMPH = 12.0;
 
 /*
- * Reject very large coordinate jumps.
+ * Position-speed values above this limit are treated
+ * as sudden GPS jumps.
  */
-constexpr double MAX_POSITION_JUMP_KMPH = 20.0;
+constexpr double MAX_POSITION_JUMP_KMPH = 25.0;
 
 /*
- * Higher values react faster.
- * Lower values produce smoother results.
+ * 30% new speed and 70% previous smoothed speed.
  */
-constexpr double SPEED_SMOOTHING_FACTOR = 0.35;
+constexpr double SPEED_SMOOTHING_FACTOR = 0.30;
 
 /*
- * Number of continuous movement readings needed
+ * Two continuous movement readings are required
  * before entering the moving state.
  */
 constexpr int START_CONFIRMATION_READINGS = 2;
 
 /*
- * Number of low-movement readings needed
- * before returning to the stationary state.
+ * Four continuous stationary readings are required
+ * before stopping.
  */
-constexpr int STOP_CONFIRMATION_READINGS = 3;
+constexpr int STOP_CONFIRMATION_READINGS = 4;
 
 /*
- * Basic GPS-quality requirements.
+ * Permissive GPS-quality limits for classroom testing.
  */
 constexpr unsigned int MIN_SATELLITES = 4;
-constexpr double MAX_HDOP = 6.0;
+constexpr double MAX_HDOP = 8.0;
 
 // --------------------------------------------------
 // Filter state
 // --------------------------------------------------
 
-bool hasReferenceLocation = false;
+bool hasRouteReference = false;
+bool hasPreviousFix = false;
 bool isMovingState = false;
 
-double referenceLatitude = 0.0;
-double referenceLongitude = 0.0;
+/*
+ * Last point accepted and sent as part of the route.
+ */
+double routeReferenceLatitude = 0.0;
+double routeReferenceLongitude = 0.0;
 
-unsigned long referenceTimestampMs = 0;
+/*
+ * Previous valid GPS fix.
+ * Used only for consecutive-fix speed calculation.
+ */
+double previousFixLatitude = 0.0;
+double previousFixLongitude = 0.0;
+unsigned long previousFixTimestampMs = 0;
 
 double smoothedSpeedKmph = 0.0;
 
@@ -136,7 +149,7 @@ double chooseSpeedKmph(
 ) {
   /*
    * Prefer the NEO-6M speed-over-ground value when it
-   * is valid and inside the expected walking range.
+   * is inside the accepted range.
    */
   if (
       gpsSpeedValid &&
@@ -147,7 +160,8 @@ double chooseSpeedKmph(
   }
 
   /*
-   * Otherwise calculate speed from distance and time.
+   * Otherwise use speed calculated from two
+   * consecutive GPS fixes.
    */
   return positionSpeedKmph;
 }
@@ -166,14 +180,22 @@ double smoothSpeed(const double newSpeedKmph) {
   return smoothedSpeedKmph;
 }
 
-void updateReferenceLocation(
+void updateRouteReference(
+    const double latitude,
+    const double longitude
+) {
+  routeReferenceLatitude = latitude;
+  routeReferenceLongitude = longitude;
+}
+
+void updatePreviousFix(
     const double latitude,
     const double longitude,
     const unsigned long timestampMs
 ) {
-  referenceLatitude = latitude;
-  referenceLongitude = longitude;
-  referenceTimestampMs = timestampMs;
+  previousFixLatitude = latitude;
+  previousFixLongitude = longitude;
+  previousFixTimestampMs = timestampMs;
 }
 
 }  // namespace
@@ -183,12 +205,16 @@ void updateReferenceLocation(
 // --------------------------------------------------
 
 void resetLocationFilter() {
-  hasReferenceLocation = false;
+  hasRouteReference = false;
+  hasPreviousFix = false;
   isMovingState = false;
 
-  referenceLatitude = 0.0;
-  referenceLongitude = 0.0;
-  referenceTimestampMs = 0;
+  routeReferenceLatitude = 0.0;
+  routeReferenceLongitude = 0.0;
+
+  previousFixLatitude = 0.0;
+  previousFixLongitude = 0.0;
+  previousFixTimestampMs = 0;
 
   smoothedSpeedKmph = 0.0;
 
@@ -230,7 +256,7 @@ FilteredLocation filterLocation(
       );
 
   if (!result.qualityAccepted) {
-    Serial.print("Filter rejected: weak GPS quality. SAT=");
+    Serial.print("Weak GPS quality. SAT=");
     Serial.print(satellites);
 
     if (hdopValid) {
@@ -244,55 +270,107 @@ FilteredLocation filterLocation(
   }
 
   /*
-   * First reliable GPS point becomes the reference point.
+   * First reliable GPS fix initializes both:
+   * 1. route reference
+   * 2. previous-fix reference
    */
-  if (!hasReferenceLocation) {
-    updateReferenceLocation(
+  if (!hasRouteReference || !hasPreviousFix) {
+    updateRouteReference(
+        latitude,
+        longitude
+    );
+
+    updatePreviousFix(
         latitude,
         longitude,
         timestampMs
     );
 
-    hasReferenceLocation = true;
+    hasRouteReference = true;
+    hasPreviousFix = true;
 
     result.speedKmph = 0.0;
     result.accepted = true;
     result.stationary = true;
     result.moving = false;
 
-    Serial.println("First GPS location accepted.");
+    Serial.println("First reliable GPS location accepted.");
 
     return result;
   }
 
-  const double distanceMeters =
+  /*
+   * Distance between two consecutive GPS fixes.
+   * Used for speed and stop detection.
+   */
+  const double fixDistanceMeters =
       TinyGPSPlus::distanceBetween(
-          referenceLatitude,
-          referenceLongitude,
+          previousFixLatitude,
+          previousFixLongitude,
           latitude,
           longitude
       );
 
-  const unsigned long elapsedMs =
-      timestampMs - referenceTimestampMs;
+  const unsigned long fixElapsedMs =
+      timestampMs - previousFixTimestampMs;
 
   const double positionSpeedKmph =
       calculatePositionSpeedKmph(
-          distanceMeters,
-          elapsedMs
+          fixDistanceMeters,
+          fixElapsedMs
       );
 
-  result.distanceMeters = distanceMeters;
+  /*
+   * Distance from the last accepted route point.
+   * Used to decide when another map point should be sent.
+   */
+  const double routeDistanceMeters =
+      TinyGPSPlus::distanceBetween(
+          routeReferenceLatitude,
+          routeReferenceLongitude,
+          latitude,
+          longitude
+      );
+
+  result.distanceMeters = routeDistanceMeters;
 
   /*
-   * Large coordinate jumps are treated as GPS errors.
+   * Every reliable GPS fix becomes the previous fix,
+   * even when it is not accepted as a route point.
+   */
+  updatePreviousFix(
+      latitude,
+      longitude,
+      timestampMs
+  );
+
+  Serial.println("----------------------------");
+
+  Serial.print("Fix distance: ");
+  Serial.print(fixDistanceMeters, 2);
+  Serial.println(" m");
+
+  Serial.print("Route distance: ");
+  Serial.print(routeDistanceMeters, 2);
+  Serial.println(" m");
+
+  Serial.print("Position speed: ");
+  Serial.print(positionSpeedKmph, 2);
+  Serial.println(" km/h");
+
+  if (gpsSpeedValid) {
+    Serial.print("GPS speed: ");
+    Serial.print(gpsSpeedKmph, 2);
+    Serial.println(" km/h");
+  }
+
+  /*
+   * Reject sudden coordinate jumps.
    */
   if (positionSpeedKmph > MAX_POSITION_JUMP_KMPH) {
     movementConfirmationCount = 0;
 
-    Serial.print("GPS jump rejected. Position speed: ");
-    Serial.print(positionSpeedKmph, 2);
-    Serial.println(" km/h");
+    Serial.println("GPS jump rejected.");
 
     return result;
   }
@@ -304,17 +382,24 @@ FilteredLocation filterLocation(
           positionSpeedKmph
       );
 
+  Serial.print("Selected speed: ");
+  Serial.print(selectedSpeedKmph, 2);
+  Serial.println(" km/h");
+
   // --------------------------------------------------
   // Stationary state
   // --------------------------------------------------
 
   if (!isMovingState) {
     const bool distanceShowsMovement =
-        distanceMeters >= START_MOVEMENT_METERS;
+        routeDistanceMeters >=
+        START_MOVEMENT_METERS;
 
     const bool speedShowsMovement =
-        selectedSpeedKmph >= MIN_MOVING_SPEED_KMPH &&
-        selectedSpeedKmph <= MAX_VALID_SPEED_KMPH;
+        selectedSpeedKmph >=
+            MIN_MOVING_SPEED_KMPH &&
+        selectedSpeedKmph <=
+            MAX_VALID_SPEED_KMPH;
 
     if (distanceShowsMovement && speedShowsMovement) {
       movementConfirmationCount++;
@@ -331,6 +416,8 @@ FilteredLocation filterLocation(
       result.stationary = true;
       result.moving = false;
 
+      Serial.println("State: Stationary");
+
       return result;
     }
 
@@ -338,11 +425,15 @@ FilteredLocation filterLocation(
         movementConfirmationCount <
         START_CONFIRMATION_READINGS
     ) {
+      result.speedKmph = 0.0;
+      result.stationary = true;
+      result.moving = false;
+
       return result;
     }
 
     /*
-     * Movement is now confirmed.
+     * Movement has now been confirmed.
      */
     isMovingState = true;
 
@@ -356,10 +447,9 @@ FilteredLocation filterLocation(
     result.stationary = false;
     result.moving = true;
 
-    updateReferenceLocation(
+    updateRouteReference(
         latitude,
-        longitude,
-        timestampMs
+        longitude
     );
 
     Serial.println("Movement state started.");
@@ -371,21 +461,25 @@ FilteredLocation filterLocation(
   // Moving state
   // --------------------------------------------------
 
-  const bool lowDistance =
-      distanceMeters < STOP_DISTANCE_METERS;
+  const bool lowFixDistance =
+      fixDistanceMeters <
+      STOP_DISTANCE_METERS;
 
   const bool lowGpsSpeed =
       !gpsSpeedValid ||
-      gpsSpeedKmph < STOP_SPEED_KMPH;
+      gpsSpeedKmph <
+          STOP_SPEED_KMPH;
 
   const bool lowPositionSpeed =
-      positionSpeedKmph < MIN_MOVING_SPEED_KMPH;
+      positionSpeedKmph <
+      MIN_MOVING_SPEED_KMPH;
 
   /*
-   * Confirm stopping using several continuous readings.
+   * Several continuous low-movement readings are
+   * required before stopping.
    */
   if (
-      lowDistance &&
+      lowFixDistance &&
       lowGpsSpeed &&
       lowPositionSpeed
   ) {
@@ -410,13 +504,11 @@ FilteredLocation filterLocation(
     smoothedSpeedKmph = 0.0;
 
     /*
-     * Use the final accepted coordinate rather than a
-     * drifting stationary coordinate.
-     *
-     * This sends one 0 km/h update to the backend.
+     * Send the last accepted route coordinate with
+     * speed zero, avoiding a drifting stop point.
      */
-    result.latitude = referenceLatitude;
-    result.longitude = referenceLongitude;
+    result.latitude = routeReferenceLatitude;
+    result.longitude = routeReferenceLongitude;
     result.distanceMeters = 0.0;
     result.speedKmph = 0.0;
 
@@ -430,24 +522,33 @@ FilteredLocation filterLocation(
   }
 
   /*
-   * While moving, wait until there is enough distance
-   * for another meaningful route point.
+   * Do not send another route point until enough
+   * route distance has accumulated.
    */
-  if (distanceMeters < TRACK_POINT_METERS) {
+  if (routeDistanceMeters < TRACK_POINT_METERS) {
     result.speedKmph = smoothedSpeedKmph;
     result.stationary = false;
     result.moving = true;
 
+    Serial.println("Moving, waiting for route distance.");
+
     return result;
   }
 
+  /*
+   * Reject invalid moving speeds.
+   */
   if (
-      selectedSpeedKmph <= 0.0 ||
-      selectedSpeedKmph > MAX_VALID_SPEED_KMPH
+      selectedSpeedKmph <
+          MIN_MOVING_SPEED_KMPH ||
+      selectedSpeedKmph >
+          MAX_VALID_SPEED_KMPH
   ) {
-    Serial.print("Moving point rejected. Speed: ");
-    Serial.print(selectedSpeedKmph, 2);
-    Serial.println(" km/h");
+    result.speedKmph = smoothedSpeedKmph;
+    result.stationary = false;
+    result.moving = true;
+
+    Serial.println("Route point rejected: invalid speed.");
 
     return result;
   }
@@ -459,14 +560,13 @@ FilteredLocation filterLocation(
   result.stationary = false;
   result.moving = true;
 
-  updateReferenceLocation(
+  updateRouteReference(
       latitude,
-      longitude,
-      timestampMs
+      longitude
   );
 
-  Serial.print("Moving point accepted. Distance: ");
-  Serial.print(distanceMeters, 2);
+  Serial.print("Route point accepted. Distance: ");
+  Serial.print(routeDistanceMeters, 2);
   Serial.print(" m, Speed: ");
   Serial.print(result.speedKmph, 2);
   Serial.println(" km/h");
