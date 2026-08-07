@@ -1,8 +1,8 @@
 # Live Location Tracker
 
-A real-time GPS tracking system built with an **ESP32**, **NEO-6M GPS module**, **SSD1306 OLED display**, **FastAPI**, and a **React Native Expo mobile application**.
+A real-time IoT GPS tracking system built with an **ESP32**, **NEO-6M GPS module**, **SSD1306 OLED display**, **FastAPI**, **SQLite**, and a **React Native Expo mobile application**.
 
-The ESP32 receives GPS coordinates, filters inaccurate readings, and sends valid location data to the FastAPI backend. The backend stores the data in SQLite and broadcasts new locations to the mobile application using WebSocket communication.
+The ESP32 reads GPS data, applies quality and movement filtering, and sends accepted location points to the FastAPI backend through HTTP requests. The backend stores the data in SQLite and broadcasts new locations to the mobile application through WebSocket communication.
 
 The mobile application displays the latest tracker position and draws the travelled route during an active tracking session.
 
@@ -12,20 +12,30 @@ The mobile application displays the latest tracker position and draws the travel
 
 The Live Location Tracker is designed to track a person carrying an ESP32-based GPS device.
 
-It combines embedded hardware, backend development, database storage, real-time communication, and mobile map visualization in a single system.
+The project demonstrates the integration of:
 
-### Main Capabilities
-
-- Live GPS location monitoring
-- Real-time latitude and longitude updates
-- Walking-speed calculation
-- Travelled-route visualization
-- Start and stop tracking controls
-- Path clearing
-- Backend connection monitoring
-- GPS noise filtering
-- OLED hardware-status display
+- Embedded-system development
+- GPS data processing
+- Wi-Fi communication
+- REST API communication
 - WebSocket-based live updates
+- Database storage
+- Mobile application development
+- Real-time map visualization
+
+---
+
+## Demo Screenshots
+
+<p align="center">
+  <img src="client/assets/images/demo1.jpeg" alt="Live Location Tracker Demo 1" width="380">
+  &nbsp;&nbsp;
+  <img src="client/assets/images/demo2.jpeg" alt="Live Location Tracker Demo 2" width="380">
+</p>
+
+<p align="center">
+  <em>Mobile application showing tracked locations and travelled routes.</em>
+</p>
 
 ---
 
@@ -34,9 +44,11 @@ It combines embedded hardware, backend development, database storage, real-time 
 ```text
 NEO-6M GPS Module
         │
+        │ UART Serial Data
         ▼
       ESP32
         │
+        │ Wi-Fi
         │ HTTP POST
         ▼
  FastAPI Backend
@@ -49,69 +61,74 @@ NEO-6M GPS Module
       React Native Mobile App
 ```
 
-The ESP32 acts as an HTTP client. The FastAPI application running on the laptop is the server.
+The ESP32 acts as an **HTTP client**, while the FastAPI application running on the laptop acts as the **server**.
 
 ---
 
 ## How the System Works
 
-1. The NEO-6M GPS module receives location information from satellites.
-2. The ESP32 reads latitude and longitude values from the GPS module.
-3. GPS quality, drift, unrealistic jumps, and movement state are evaluated on the ESP32.
-4. Accepted location data is sent to the FastAPI backend through an HTTP POST request.
-5. The backend stores the location in an SQLite database.
-6. The backend broadcasts new location data through WebSocket.
-7. The mobile application receives the location and updates the map.
-8. During tracking, the application draws the travelled route in real time.
+1. The NEO-6M GPS module receives location information from GPS satellites.
+2. The GPS module sends digital NMEA data to the ESP32 through UART communication.
+3. The ESP32 extracts latitude, longitude, speed, satellite count, and HDOP using TinyGPSPlus.
+4. The ESP32 validates GPS quality and filters inaccurate or unrealistic movement.
+5. Accepted location data is sent to the FastAPI backend through an HTTP POST request.
+6. The backend stores the location in SQLite.
+7. The backend broadcasts the new location through WebSocket.
+8. The mobile application receives the new location and updates the map.
+9. During tracking, the application draws the travelled route in real time.
 
 ---
 
-## Features
+## Main Features
 
 ### Mobile Application
 
 - Displays the latest ESP32 tracker location
-- Shows only one location marker when the application opens
-- Does not display old route history during application startup
-- Starts a new tracking session when **Start Tracking** is pressed
-- Uses the latest GPS position as the starting point
-- Receives new location data through WebSocket
-- Draws the current tracking-session route
-- Keeps the completed route visible after tracking is stopped
-- Removes the route only after **Clear Path** is pressed
-- Preserves one latest-location marker after clearing the route
+- Shows one marker when the application opens
+- Does not draw previous route history during startup
+- Starts a new route when **Start Tracking** is pressed
+- Uses the latest location as the route starting point
+- Receives live locations through WebSocket
+- Draws the travelled route in real time
+- Keeps the completed route visible after tracking stops
+- Clears the route using **Clear Path**
+- Preserves the latest-location marker after clearing
 - Displays speed only during active tracking
-- Shows `--` before tracking starts and after tracking stops
-- Displays a general map when GPS data is unavailable
-- Automatically focuses on the first valid GPS location
 - Shows backend and live-tracking connection status
 - Supports manual refresh
-- Displays the last-updated timestamp in Nepal time
+- Displays the last-updated time in Nepal time
 
 ### ESP32 Tracker
 
 - Connects to Wi-Fi
+- Automatically attempts Wi-Fi reconnection
 - Checks backend availability
-- Reads GPS data
-- Uses GPS speed-over-ground with coordinate-based speed as a fallback
-- Processes only fresh GPS fixes
-- Filters drift using stationary and moving states
-- Rejects weak GPS quality and unrealistic position jumps
-- Requires consecutive readings to confirm starting and stopping
-- Sends accepted data and a final `0.0 km/h` update to the backend
-- Displays system information on the OLED screen
-- Automatically reconnects to Wi-Fi when disconnected
+- Reads GPS data through UART
+- Processes fresh GPS fixes
+- Uses GPS speed-over-ground when valid
+- Calculates coordinate-based speed as a fallback
+- Uses stationary and moving states
+- Filters GPS drift
+- Rejects weak GPS quality
+- Rejects unrealistic position jumps
+- Smooths speed values
+- Requires consecutive readings to confirm movement
+- Requires consecutive low-movement readings to confirm stopping
+- Sends accepted locations to the backend
+- Sends a final `0.0 km/h` update when movement stops
+- Displays GPS and connection information on the OLED
 
 ### Backend
 
 - FastAPI REST API
 - SQLite database
 - SQLAlchemy ORM
-- WebSocket live updates
-- Location history storage
+- Location validation
+- Location-history storage
 - Latest-location retrieval
 - Location deletion
 - Backend health checking
+- WebSocket broadcasting
 - Automatic API documentation
 
 ---
@@ -124,35 +141,28 @@ The ESP32 acts as an HTTP client. The FastAPI application running on the laptop 
 - Breadboard
 - Jumper wires
 - USB cable or portable power source
-- Smartphone for running the mobile application
-- Laptop for running the backend server
+- Smartphone
+- Laptop
 
 ---
 
 ## Hardware Setup
 
 <p align="center">
-  <img src="assets/hardware-setup.jpg" alt="ESP32 GPS Tracker Hardware Setup" width="700">
+  <img src="client/assets/images/hardware.png" alt="ESP32 GPS Tracker Hardware Setup" width="700">
 </p>
 
-The hardware consists of an ESP32 development board connected to a NEO-6M GPS module and an SSD1306 OLED display.
+<p align="center">
+  <em>ESP32 connected to the NEO-6M GPS module and SSD1306 OLED display.</em>
+</p>
 
-Place your hardware image in:
-
-```text
-assets/hardware-setup.jpg
-```
-
-The project should contain:
+Store the project images as:
 
 ```text
-location-tracker/
-├── assets/
-│   └── hardware-setup.jpg
-├── client/
-├── server/
-├── esp32/
-└── README.md
+assets/
+├── hardware.png
+├── demo1.png
+└── demo2.png
 ```
 
 ---
@@ -168,9 +178,7 @@ location-tracker/
 | TX         | GPIO 16    |
 | RX         | GPIO 17    |
 
-The GPS module sends data through its `TX` pin to the ESP32 `RX` pin.
-
----
+The GPS module sends serial data through its `TX` pin to ESP32 GPIO `16`.
 
 ### SSD1306 OLED Display to ESP32
 
@@ -181,7 +189,7 @@ The GPS module sends data through its `TX` pin to the ESP32 `RX` pin.
 | SDA          | GPIO 21 |
 | SCL          | GPIO 22 |
 
-The OLED I2C address used by the project is:
+OLED I2C address:
 
 ```text
 0x3C
@@ -228,25 +236,23 @@ The OLED I2C address used by the project is:
 location-tracker/
 │
 ├── assets/
-│   └── hardware-setup.jpg
+│   ├── hardware.png
+│   ├── demo1.png
+│   └── demo2.png
 │
 ├── client/
 │   ├── app/
 │   │   ├── _layout.tsx
 │   │   └── index.tsx
-│   │
 │   ├── components/
 │   │   ├── InfoCard.tsx
 │   │   ├── StatusBadge.tsx
 │   │   └── TrackerMap.tsx
-│   │
 │   ├── services/
 │   │   ├── api.ts
 │   │   └── socket.ts
-│   │
 │   ├── types/
 │   │   └── location.ts
-│   │
 │   └── package.json
 │
 ├── server/
@@ -254,27 +260,24 @@ location-tracker/
 │   │   ├── routes/
 │   │   │   ├── __init__.py
 │   │   │   └── locations.py
-│   │   │
 │   │   ├── __init__.py
 │   │   ├── database.py
 │   │   ├── main.py
 │   │   ├── models.py
 │   │   ├── schemas.py
 │   │   └── websocket_manager.py
-│   │
 │   └── requirements.txt
 │
 ├── esp32/
 │   ├── include/
 │   │   ├── api_client.h
 │   │   ├── config.example.h
+│   │   ├── config.h
 │   │   └── location_filter.h
-│   │
 │   ├── src/
 │   │   ├── api_client.cpp
 │   │   ├── location_filter.cpp
 │   │   └── main.cpp
-│   │
 │   └── platformio.ini
 │
 └── README.md
@@ -282,33 +285,49 @@ location-tracker/
 
 ---
 
+## Network Requirements
+
+The laptop, ESP32, and smartphone must be connected to the same Wi-Fi network or mobile hotspot.
+
+```text
+Wi-Fi Router or Mobile Hotspot
+        │
+        ├── Laptop
+        │     ├── FastAPI backend
+        │     └── Expo development server
+        │
+        ├── ESP32 tracker
+        │
+        └── Smartphone
+              └── Expo mobile application
+```
+
+The ESP32 sends data to the laptop IP address. It does not communicate directly with the mobile application.
+
+---
+
 ## Backend Setup
 
-Open a terminal in the project root and enter the backend folder:
+Open a terminal in the project root:
 
 ```bash
 cd server
 ```
 
-Create a Python virtual environment:
+Create and activate a Python virtual environment:
 
 ```bash
 python3 -m venv venv
-```
-
-Activate it on macOS or Linux:
-
-```bash
 source venv/bin/activate
 ```
 
-Activate it on Windows:
+On Windows:
 
 ```bash
 venv\Scripts\activate
 ```
 
-Install the required Python packages:
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -320,55 +339,54 @@ Start the FastAPI backend:
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The backend will be available at:
+Backend address:
 
 ```text
 http://YOUR_LAPTOP_IP:8000
 ```
 
-Interactive API documentation will be available at:
+API documentation:
 
 ```text
 http://YOUR_LAPTOP_IP:8000/docs
+```
+
+Health endpoint:
+
+```text
+http://YOUR_LAPTOP_IP:8000/health
 ```
 
 ---
 
 ## Mobile Application Setup
 
-Open another terminal and enter the client folder:
+Open another terminal:
 
 ```bash
 cd client
-```
-
-Install the required packages:
-
-```bash
 npm install
 ```
 
-Create a `.env` file inside the `client` folder:
+Create:
+
+```text
+client/.env
+```
+
+Add:
 
 ```env
 EXPO_PUBLIC_SERVER_IP=YOUR_LAPTOP_IP
 ```
 
-Example:
-
-```env
-EXPO_PUBLIC_SERVER_IP=192.168.201.250
-```
-
-Start the Expo application:
+Start Expo:
 
 ```bash
 npx expo start --clear
 ```
 
-Open the application on a physical Android or iOS device using Expo Go.
-
-The smartphone and laptop must be connected to the same local Wi-Fi network or mobile hotspot.
+Open the application on a physical device using Expo Go.
 
 ---
 
@@ -376,13 +394,13 @@ The smartphone and laptop must be connected to the same local Wi-Fi network or m
 
 Open the `esp32` folder as a PlatformIO project.
 
-Create the following configuration file:
+Create:
 
 ```text
 esp32/include/config.h
 ```
 
-Add your Wi-Fi and backend information:
+Add:
 
 ```cpp
 #ifndef CONFIG_H
@@ -399,19 +417,43 @@ Add your Wi-Fi and backend information:
 #endif
 ```
 
-Example server configuration:
+Build and upload the firmware through PlatformIO.
 
-```cpp
-#define SERVER_IP "192.168.201.250"
-#define SERVER_PORT 8000
-```
-
-Build and upload the firmware using PlatformIO.
-
-After uploading, open the PlatformIO Serial Monitor using:
+Open the Serial Monitor at:
 
 ```text
 115200 baud
+```
+
+---
+
+## IP Address Configuration
+
+When the laptop IP address changes, update it in these two locations:
+
+```text
+client/.env
+esp32/include/config.h
+```
+
+Mobile application:
+
+```env
+EXPO_PUBLIC_SERVER_IP=NEW_LAPTOP_IP
+```
+
+ESP32:
+
+```cpp
+#define SERVER_IP "NEW_LAPTOP_IP"
+```
+
+After changing the ESP32 IP configuration, rebuild and upload the firmware again.
+
+The backend command remains:
+
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ---
@@ -431,7 +473,7 @@ After uploading, open the PlatformIO Serial Monitor using:
 
 ## Location Data Format
 
-The ESP32 sends GPS data to the backend in JSON format:
+The ESP32 sends accepted GPS data to the backend in JSON format:
 
 ```json
 {
@@ -442,8 +484,6 @@ The ESP32 sends GPS data to the backend in JSON format:
 }
 ```
 
-### Fields
-
 | Field       | Description                              |
 | ----------- | ---------------------------------------- |
 | `device_id` | Identifier assigned to the ESP32 tracker |
@@ -453,37 +493,70 @@ The ESP32 sends GPS data to the backend in JSON format:
 
 ---
 
-## GPS Speed Calculation
+## Data Transmission
 
-The tracker prefers the **speed-over-ground value reported by the NEO-6M GPS module** when that value is valid and within the allowed range.
+The ESP32 sends accepted location data through:
 
-If GPS speed is unavailable, the ESP32 calculates speed from two GPS positions:
+```text
+POST http://YOUR_LAPTOP_IP:8000/locations
+```
+
+The backend then:
+
+1. Receives the JSON request.
+2. Validates the location.
+3. Stores it in SQLite.
+4. Broadcasts it through WebSocket.
+5. Delivers the update to the mobile application.
+
+---
+
+## GPS Distance and Speed Calculation
+
+Distance is calculated using:
+
+```cpp
+TinyGPSPlus::distanceBetween(
+    previousLatitude,
+    previousLongitude,
+    currentLatitude,
+    currentLongitude
+);
+```
+
+The function returns the geographic distance in metres.
+
+The current location filter uses two distance measurements:
+
+```text
+Previous GPS fix → Current GPS fix
+Used for speed and stop detection
+
+Last accepted route point → Current GPS fix
+Used to decide when a new route point should be sent
+```
+
+Speed is calculated using:
 
 ```text
 Speed = Distance travelled ÷ Elapsed time
 ```
 
-The calculated value is converted from metres per second to kilometres per hour:
+The result is converted to kilometres per hour:
 
 ```text
 Speed in km/h = Speed in m/s × 3.6
 ```
 
-Distance is calculated from the previous and current latitude-longitude coordinates using:
-
-```cpp
-TinyGPSPlus::distanceBetween(...)
-```
-
-Both latitude and longitude are used when calculating the geographic distance.
+The tracker prefers the speed-over-ground value reported by the NEO-6M when it is valid and within the accepted range.
 
 ---
 
 ## GPS Filtering
 
-GPS coordinates can change slightly even when the tracker is stationary. This is known as GPS drift and is especially common indoors.
+GPS coordinates can change slightly even when the tracker is stationary. This behaviour is known as GPS drift.
 
-The current filter uses separate **stationary** and **moving** states:
+The current `location_filter.cpp` uses separate stationary and moving states.
 
 ```cpp
 constexpr double START_MOVEMENT_METERS = 3.0;
@@ -504,159 +577,88 @@ constexpr unsigned int MIN_SATELLITES = 4;
 constexpr double MAX_HDOP = 6.0;
 ```
 
-### Filtering Process
+### Filtering Behaviour
 
-- The first reliable GPS point becomes the reference location
-- At least four satellites are required
-- HDOP values above the configured limit are rejected
-- Two valid readings are required before entering the moving state
-- While moving, meaningful route points are accepted without restarting movement confirmation each time
-- Three low-movement readings are required before returning to the stationary state
-- Large position jumps and unrealistic speeds are rejected
-- Speed changes are smoothed before transmission
-- One final `0.0 km/h` update is sent when movement stops
-
-The values are intended for a walking-tracker demonstration. Indoor GPS results can still vary because software filtering cannot fully correct weak or reflected satellite signals.
-
----
-
-## GPS Accuracy Considerations
-
-GPS accuracy can be affected by:
-
-- Indoor environments
-- Buildings and walls
-- Low satellite count
-- Weak satellite signals
-- Reflected satellite signals
-- Nearby electrical interference
-- Poor antenna position
-
-For better tracking results:
-
-- Use the tracker outdoors
-- Keep the GPS antenna facing upward
-- Avoid covering the GPS antenna
-- Wait for at least five or six satellites
-- Allow the module time to obtain a stable GPS fix
+- Invalid coordinates are rejected.
+- Weak GPS quality is rejected.
+- The first reliable coordinate becomes the reference point.
+- Two valid readings are required to confirm movement.
+- New route points are accepted after meaningful displacement.
+- Speed is smoothed before transmission.
+- Unrealistic position jumps are rejected.
+- Three low-movement readings are required to confirm stopping.
+- A final update with `0.0 km/h` is sent when movement stops.
 
 ---
 
 ## Application Behaviour
 
-### When the Application Opens
+### Application Startup
 
-- The application checks the backend connection
-- The latest saved ESP32 location is requested
-- Only one latest-location marker is displayed
-- Old route history is not drawn
-- Tracking status shows **Tracking Stopped**
-- Speed displays `--`
+- Checks backend availability
+- Requests the latest saved tracker location
+- Displays one latest-location marker
+- Does not draw old route history
+- Shows tracking as stopped
+- Displays speed as `--`
 
----
+### Start Tracking
 
-### When GPS Data Is Unavailable
+- Uses the latest location as the starting point
+- Opens the WebSocket connection
+- Adds new accepted GPS points to the route
+- Displays the starting point, latest point, and travelled route
+- Displays speed during tracking
 
-- A general map is still displayed
-- No location marker is shown
-- The map displays a message that GPS data is unavailable
-- Latitude, longitude, speed, and time display `--`
-- The application waits for the first valid GPS coordinate
+### Stop Tracking
 
-When the first valid coordinate becomes available:
+- Closes the WebSocket connection
+- Stops adding points to the displayed route
+- Keeps the completed route visible
+- Returns speed to `--`
 
-- The unavailable-location message disappears
-- The map automatically focuses on the tracker location
-- One tracker marker is displayed
+### Clear Path
 
----
-
-### When Start Tracking Is Pressed
-
-- The latest tracker position becomes the starting point
-- A new tracking session begins
-- The WebSocket connection opens
-- New accepted GPS points are added to the route
-- A green marker displays the starting point
-- A red marker displays the latest point
-- A blue line displays the travelled route
-- Speed becomes visible
+- Removes the displayed route
+- Preserves the latest-location marker
+- Returns the map to its single-marker state
 
 ---
 
-### When Stop Tracking Is Pressed
-
-- The live WebSocket connection closes
-- New points are no longer added to the current route
-- The completed route remains visible
-- The final tracker position remains visible
-- Speed returns to `--`
-- The route remains until **Clear Path** is pressed
-
----
-
-### When Tracking Is Started Again
-
-- The previous session route is replaced
-- A fresh route begins from the latest available GPS position
-- Only new points from the new tracking session are displayed
-
----
-
-### When Clear Path Is Pressed
-
-- Tracking must first be stopped
-- The completed route is removed
-- The latest known position remains visible as one marker
-- No blue route is displayed
-- Speed remains `--`
-- The map returns to its initial single-marker state
-
----
-
-## Map Markers
+## Map Elements
 
 | Map Element  | Meaning                                        |
 | ------------ | ---------------------------------------------- |
 | Green marker | Starting point of the current tracking session |
 | Red marker   | Latest tracker location                        |
 | Blue line    | Travelled route                                |
-| No marker    | GPS location is not yet available              |
+| No marker    | No valid tracker location is available         |
 
 ---
 
 ## OLED Display
 
-The OLED screen provides hardware status without requiring the mobile application.
+The OLED displays:
 
-It can display:
-
-```text
-Wi-Fi connection status
-Backend connection status
-Latitude
-Longitude
-Filtered speed
-Satellite count
-GPS location status
-```
-
-Example:
-
-```text
-WiFi: Connected
-Backend: Online
-Lat: 27.617827
-Lon: 85.536897
-Speed: 1.9 km/h
-Satellites: 6
-```
+- Latitude
+- Longitude
+- Filtered speed
+- Satellite count
+- Wi-Fi status
+- Backend status
+- GPS quality
+- Location transmission status
+- Movement state
 
 ---
 
 ## Running the Complete System
 
-### 1. Start the Backend
+### 1. Connect all devices
+
+Connect the laptop, ESP32, and smartphone to the same Wi-Fi network or hotspot.
+
+### 2. Start the backend
 
 ```bash
 cd server
@@ -664,35 +666,44 @@ source venv/bin/activate
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 2. Start the Mobile Application
+### 3. Verify the backend
+
+Open from the smartphone browser:
+
+```text
+http://YOUR_LAPTOP_IP:8000/health
+```
+
+### 4. Start the mobile application
 
 ```bash
 cd client
 npx expo start --clear
 ```
 
-### 3. Power the ESP32
+### 5. Power the ESP32
 
-Connect the ESP32 to a USB power source or portable battery.
+Connect the ESP32 to a USB cable or portable battery.
 
-### 4. Wait for Connections
+### 6. Wait for GPS
 
 Confirm that:
 
-- The ESP32 is connected to Wi-Fi
-- The OLED displays **Backend Online**
-- The GPS module has obtained satellite signals
-- The mobile application displays **Backend Online**
+- Wi-Fi is connected
+- Backend status is online
+- Latitude and longitude are available
+- Satellite count is sufficient
+- HDOP is within the accepted limit
 
-### 5. Begin Tracking
+### 7. Begin tracking
 
 1. Open the mobile application.
 2. Wait for the initial tracker marker.
 3. Press **Start Tracking**.
-4. Walk while carrying the ESP32 tracker.
-5. Observe the route update on the map.
-6. Press **Stop Tracking** after completing the route.
-7. Press **Clear Path** when the route is no longer needed.
+4. Walk while carrying the tracker.
+5. Observe the route update.
+6. Press **Stop Tracking** when finished.
+7. Press **Clear Path** to remove the route.
 
 ---
 
@@ -702,86 +713,84 @@ Confirm that:
 
 Check that:
 
-- The FastAPI server is running
-- The laptop and phone are connected to the same network
-- The configured laptop IP address is correct
-- The backend is running on port `8000`
-- The phone can access the backend health endpoint
+- FastAPI is running
+- The laptop and ESP32 are on the same network
+- `SERVER_IP` contains the current laptop IP
+- Uvicorn is running with `--host 0.0.0.0`
+- Port `8000` is correct
+- The health endpoint opens from the phone
 
-Test the backend from the phone browser:
-
-```text
-http://YOUR_LAPTOP_IP:8000/health
-```
-
----
-
-### ESP32 Cannot Reach the Backend
+### GPS Location Is Unavailable
 
 Check that:
 
-- `SERVER_IP` contains the laptop IP address
-- The ESP32 and laptop are connected to the same network
-- The FastAPI server uses `--host 0.0.0.0`
-- The backend port is correct
-- The ESP32 was uploaded again after changing its configuration
-
----
-
-### GPS Location Is Not Available
-
-Check that:
-
-- The GPS module wiring is correct
+- The GPS module is powered correctly
 - GPS `TX` is connected to ESP32 GPIO `16`
-- The GPS antenna has a clear view of the sky
-- The device is outdoors or near an open window
-- The GPS module has obtained enough satellites
+- GPS baud rate is `9600`
+- The antenna is facing upward
+- The module is outdoors or near an open window
+- The module has enough time to obtain a valid fix
 
----
+Satellite count alone does not guarantee a valid coordinate. The location must also be valid and recent.
 
-### Map Does Not Show a Route
+### Route Does Not Appear
 
 Check that:
 
 - **Start Tracking** has been pressed
-- The live-tracking status is connected
-- The ESP32 is sending accepted GPS points
-- Movement is greater than the configured minimum distance
-- The backend is receiving `POST /locations` requests
-
----
+- WebSocket is connected
+- The ESP32 is sending accepted locations
+- The backend is receiving `POST /locations`
+- The movement threshold has been reached
+- GPS quality satisfies the filter
 
 ### Speed Remains Zero
 
-Possible reasons include:
+Possible reasons:
 
-- The start movement distance has not been reached
-- Two valid start-confirmation readings have not yet been received
-- Satellite count is below the configured minimum
-- HDOP indicates weak GPS quality
-- Speed or position change is outside the accepted range
-- The GPS module is not producing fresh fixes
-
----
-
-### Speed Appears While Stationary
-
-Possible causes include:
-
-- GPS coordinate drift
-- Weak satellite signals
-- Indoor testing
-- Reflected GPS signals
-- A coordinate jump greater than the minimum movement threshold
-
-The moving/stationary state filter reduces this behaviour, but a low-cost GPS module may still occasionally report inaccurate indoor movement.
+- No valid latitude or longitude is available
+- The GPS fix is not recent
+- Movement has not reached the start threshold
+- Two confirmation readings have not been received
+- Satellite count is too low
+- HDOP exceeds the configured limit
+- The movement was rejected as unrealistic
 
 ---
 
-### Route Does Not Appear Immediately
+## GPS Accuracy Considerations
 
-The filter requires two valid readings before it enters the moving state. After movement starts, new route points are accepted when the configured route-point distance is reached.
+GPS accuracy can be affected by:
+
+- Indoor environments
+- Concrete walls
+- Low satellite count
+- Weak or reflected satellite signals
+- Poor antenna direction
+- Nearby electronic interference
+
+For better results:
+
+- Test outdoors whenever possible
+- Keep the GPS antenna facing upward
+- Avoid covering the antenna
+- Wait for at least five or six satellites
+- Wait until valid latitude and longitude values appear
+- Walk continuously for several metres
+
+Indoor operation cannot be guaranteed because GPS depends on satellite visibility. Software filtering can reduce drift, but it cannot create accurate coordinates when the GPS signal is unreliable.
+
+---
+
+## Limitations
+
+- Indoor GPS accuracy is limited
+- The NEO-6M may require a clear view of the sky
+- GPS coordinates may drift while stationary
+- The backend runs locally unless deployed
+- Online map tiles may require internet access
+- The system currently supports one main tracker
+- Mobile Start and Stop controls affect route display, while the ESP32 may continue sending accepted locations while powered
 
 ---
 
@@ -790,34 +799,35 @@ The filter requires two valid readings before it enters the moving state. After 
 - Multiple tracker support
 - User authentication
 - Tracker-device selection
+- Tracking sessions stored in the database
 - Route history by date
-- Total distance calculation
+- Total-distance calculation
 - Average-speed calculation
 - Battery-level monitoring
 - Geofencing alerts
 - Emergency notification button
 - Cloud backend deployment
-- Background mobile tracking
-- Offline map support
+- Offline maps
 - Route export
-- Kalman-filter GPS processing
-- Satellite-count storage
-- Tracker connection status
-- Session-based database storage
+- Kalman filtering
+- Satellite-count and HDOP storage
+- Tracker heartbeat status
+- Device-controlled start and stop tracking
 
 ---
 
 ## Project Purpose
 
-This project was developed as an academic prototype to demonstrate the integration of:
+This academic prototype demonstrates the integration of:
 
 - Embedded-system development
 - GPS data processing
-- REST API communication
+- IoT communication
+- REST API development
 - WebSocket communication
 - Mobile application development
 - Database management
 - Real-time map visualization
 - Hardware and software integration
 
-The project demonstrates an end-to-end IoT workflow in which an ESP32 GPS device sends filtered location data to a backend server and the backend delivers live updates to a mobile application.
+The project demonstrates an end-to-end IoT workflow in which an ESP32 GPS device sends filtered location data to a FastAPI backend, the backend stores the data in SQLite, and live location updates are delivered to a React Native mobile application through WebSocket communication.
