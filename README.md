@@ -156,15 +156,6 @@ The ESP32 acts as an **HTTP client**, while the FastAPI application running on t
   <em>ESP32 connected to the NEO-6M GPS module and SSD1306 OLED display.</em>
 </p>
 
-Store the project images as:
-
-```text
-assets/
-├── hardware.png
-├── demo1.png
-└── demo2.png
-```
-
 ---
 
 ## Hardware Connections
