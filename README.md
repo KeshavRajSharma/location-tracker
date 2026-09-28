@@ -28,9 +28,9 @@ The project demonstrates the integration of:
 ## Demo Screenshots
 
 <p align="center">
-  <img src="client/assets/images/demo1.jpeg" alt="Live Location Tracker Demo 1" width="380">
+  <img src="client/assets/images/demo1.png" alt="Live Location Tracker Demo 1" width="380">
   &nbsp;&nbsp;
-  <img src="client/assets/images/demo2.jpeg" alt="Live Location Tracker Demo 2" width="380">
+  <img src="client/assets/images/demo2.png" alt="Live Location Tracker Demo 2" width="380">
 </p>
 
 <p align="center">
